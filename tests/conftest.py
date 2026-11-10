@@ -95,3 +95,17 @@ def real_read(cfg):
     from latedel.ingest import read_source
 
     return read_source(REAL_CSV, cfg)
+
+
+# --- the deliveries of the synthetic fixture ----------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def delivered(cfg, fixture_read, tmp_path_factory: pytest.TempPathFactory):
+    """The 15 deliveries of the synthetic fixture published once per session: ``(folder, plan, entries)``. Tests that change a file copy the folder first."""
+    from latedel.deliveries import delivery_plan, publish
+
+    folder = tmp_path_factory.mktemp("deliveries")
+    plan = delivery_plan(cfg.deliveries)
+    entries = [publish(spec, fixture_read[0], folder, source_sha256="ab" * 32) for spec in plan]
+    return folder, plan, entries

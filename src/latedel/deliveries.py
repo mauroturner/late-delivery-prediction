@@ -299,15 +299,20 @@ def delivery_digest(folder: Path) -> tuple[str, dict[str, int]]:
     return _digest(_file_hashes(folder)), _row_counts(folder)
 
 
-def read_delivery(out_dir: Path, entry: ManifestEntry) -> DeliveryFrames:
-    """Read the three files of a delivery after checking them against its manifest entry (hash first, then rows)."""
+def read_delivery(out_dir: Path, entry: ManifestEntry, *, verify: bool = True) -> DeliveryFrames:
+    """Read the three files of a delivery after checking them against its manifest entry (hash first, then rows).
+
+    ``verify=False`` skips that check: it is for the validation (V24), which compares the files with the manifest itself and reports the difference as a rule
+    instead of failing. A file that is missing or is not Parquet still raises.
+    """
     folder = Path(out_dir) / entry.delivery_id
-    digest = _digest(_file_hashes(folder))
-    if digest != entry.sha256_json:
-        raise DeliveryError(f"la huella de la entrega {entry.delivery_id} ({digest}) no es la del manifiesto ({entry.sha256_json}).")
-    rows = _row_counts(folder)
-    if rows != {"orders": entry.orders, "order_lines": entry.lines, "outcomes": entry.outcomes}:
-        raise DeliveryError(f"las filas de la entrega {entry.delivery_id} ({rows}) no son las del manifiesto.")
+    if verify:
+        digest = _digest(_file_hashes(folder))
+        if digest != entry.sha256_json:
+            raise DeliveryError(f"la huella de la entrega {entry.delivery_id} ({digest}) no es la del manifiesto ({entry.sha256_json}).")
+        rows = _row_counts(folder)
+        if rows != {"orders": entry.orders, "order_lines": entry.lines, "outcomes": entry.outcomes}:
+            raise DeliveryError(f"las filas de la entrega {entry.delivery_id} ({rows}) no son las del manifiesto.")
     tables: dict[str, Any] = {}
     for name in DELIVERY_FILES:
         frame = pq.read_table(folder / f"{name}.parquet").to_pandas()
