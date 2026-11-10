@@ -164,3 +164,18 @@ def real_launch_conn(real_launch_db: Path, tmp_path: Path):
     conn = connect(target)
     yield conn
     conn.close()
+
+
+@pytest.fixture(scope="session")
+def control_run(cfg, tmp_path_factory: pytest.TempPathFactory):
+    """Factory: control_run("standard_market") or control_run("none") -> a ``Control`` (12,000 synthetic orders, the launch and the full warehouse), built once per signal."""
+    from tests.fixtures.model_helpers import build_control
+
+    cache: dict = {}
+
+    def build(signal: str):
+        if signal not in cache:
+            cache[signal] = build_control(signal, tmp_path_factory.mktemp(f"control_{signal}"), cfg)
+        return cache[signal]
+
+    return build

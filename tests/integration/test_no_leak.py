@@ -3,19 +3,21 @@
 Three probes, from the file to the matrix: (1) every outcome column of the source is changed and the orders and lines that the reader returns, and so the
 variables, are the same; (2) every outcome in the warehouse is changed and the variables built from the staging tables are the same; (3) the outcomes that are
 not known on a date, and the orders created after it (deleted, changed and added), change nothing that is computed for that date. The model-level versions
-of (3), for the scores, the thresholds and the models of a date, join this file with the units that make them (U12 to U14).
+of (3) join this file with the units that make them: the model and its calibration (U12); the threshold (U13); the scores and the flags (U14).
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from latedel.deliveries import delivery_plan, publish, read_delivery
 from latedel.features import build_features, read_order_frames
 from latedel.ingest import read_source
+from latedel.model import predict_risk, train_model
 from latedel.warehouse import connect, load_delivery, rebuild_at
 from tests.fixtures.helpers import load_through, rebuild_layers
 from tests.fixtures.make_fixture import HEADER, _parse, _serialise, _stamp
@@ -103,17 +105,22 @@ def test_perturbing_every_outcome_in_the_warehouse_changes_no_feature(cfg, deliv
 
 
 def tamper_after(conn, day: date) -> dict[str, int]:
-    """Change the warehouse after `day`: delete, change and add orders created after it, and change the outcomes still unknown on it. Stays valid for the controls."""
+    """Change the warehouse after `day`: delete, change and add orders created after it, and change the outcomes still unknown on it. Stays valid for the controls.
+
+    Set-based, in the rows that a one-by-one loop over the orders created after `day` (every third one deleted, the others changed) would touch.
+    """
     d = day.isoformat()
-    later = [r[0] for r in conn.execute("SELECT order_id FROM raw_orders WHERE order_date > ? ORDER BY order_id", (d,))]
-    deleted, changed = later[::3], [o for i, o in enumerate(later) if i % 3]
-    for order in deleted:
-        conn.execute("DELETE FROM raw_order_lines WHERE order_id = ?", (order,))
-        conn.execute("DELETE FROM raw_outcomes WHERE order_id = ?", (order,))
-        conn.execute("DELETE FROM raw_orders WHERE order_id = ?", (order,))
-    for order in changed:
-        conn.execute("UPDATE raw_orders SET shipping_mode = 'Same Day', payment_type = 'CASH', market = 'ZZ', order_ts = substr(order_ts, 1, 11) || '23:59' WHERE order_id = ?", (order,))
-        conn.execute("UPDATE raw_order_lines SET sales = sales * 10, quantity = quantity + 5 WHERE order_id = ?", (order,))
+    conn.execute("DROP TABLE IF EXISTS temp.later")
+    conn.execute("CREATE TEMP TABLE later AS SELECT order_id, (ROW_NUMBER() OVER (ORDER BY order_id)) - 1 AS position FROM raw_orders WHERE order_date > ?", (d,))
+    deleted = conn.execute("SELECT COUNT(*) FROM later WHERE position % 3 = 0").fetchone()[0]
+    changed = conn.execute("SELECT COUNT(*) FROM later WHERE position % 3 != 0").fetchone()[0]
+    for table in ("raw_order_lines", "raw_outcomes", "raw_orders"):
+        conn.execute(f"DELETE FROM {table} WHERE order_id IN (SELECT order_id FROM later WHERE position % 3 = 0)")
+    conn.execute(
+        "UPDATE raw_orders SET shipping_mode = 'Same Day', payment_type = 'CASH', market = 'ZZ', order_ts = substr(order_ts, 1, 11) || '23:59' "
+        "WHERE order_id IN (SELECT order_id FROM later WHERE position % 3 != 0)")
+    conn.execute("UPDATE raw_order_lines SET sales = sales * 10, quantity = quantity + 5 WHERE order_id IN (SELECT order_id FROM later WHERE position % 3 != 0)")
+    conn.execute("DROP TABLE temp.later")
     for number in range(5):
         order, on = 900_000 + number, day + timedelta(days=1 + number)
         conn.execute(
@@ -124,7 +131,7 @@ def tamper_after(conn, day: date) -> dict[str, int]:
     unknown = conn.execute(
         "UPDATE raw_outcomes SET real_days = 5, source_label = CASE WHEN 5 > (SELECT scheduled_days FROM raw_orders o WHERE o.order_id = raw_outcomes.order_id) THEN 1 ELSE 0 END "
         "WHERE outcome_known_date > ? AND order_id IN (SELECT order_id FROM raw_orders WHERE order_date <= ?)", (d, d)).rowcount
-    return {"deleted": len(deleted), "changed": len(changed), "added": 5, "unknown_outcomes": unknown}
+    return {"deleted": deleted, "changed": changed, "added": 5, "unknown_outcomes": unknown}
 
 
 @pytest.mark.parametrize("upto", [4, 5, 9])
@@ -153,6 +160,52 @@ def test_the_same_tampering_does_change_the_variables_when_the_date_is_the_last_
     rebuild_at(messy, delivered[1][-1].as_of, cfg)
     assert messy.execute("SELECT COUNT(*) FROM stg_orders").fetchone()[0] > clean.execute("SELECT COUNT(*) FROM stg_orders").fetchone()[0]
     assert len(matrices(messy)["f2"]) != len(matrices(clean)["f2"])
+
+
+# --- (3) at the level of the model: nothing later than the date reaches the selection or the calibration (D47, U12) ------------------------------------------------
+
+
+def trained_at(conn, as_of, cfg):
+    rebuild_at(conn, as_of, cfg)
+    return train_model(conn, as_of, cfg)
+
+
+def test_the_selection_and_calibration_of_a_date_do_not_depend_on_later_data(cfg, delivered, tmp_path):
+    from tests.fixtures.model_helpers import small_cfg
+
+    config = small_cfg(cfg)
+    as_of = delivered[1][0].as_of                                    # the launch: the date at which the model is trained
+    clean = connect(tmp_path / "clean.sqlite")
+    load_through(clean, delivered, config, 1)                         # the warehouse as it was on the date
+    messy = connect(tmp_path / "messy.sqlite")
+    load_through(messy, delivered, config, 15)                        # the warehouse today, with everything that happened later
+    done = tamper_after(messy, as_of)
+    assert done["deleted"] > 20 and done["unknown_outcomes"] > 0
+    a, b = trained_at(clean, as_of, config), trained_at(messy, as_of, config)
+    assert a.selection.chosen == b.selection.chosen and a.selection.losses == b.selection.losses, "the 24 losses of the selection, exactly"
+    pd.testing.assert_frame_equal(a.valid_v2, b.valid_v2, check_exact=True)              # the calibrated risks of V2: model and calibrator
+    probe = matrices(clean)[a.model.feature_set].loc[a.valid_v2["order_id"]]
+    np.testing.assert_array_equal(predict_risk(a.model, probe), predict_risk(b.model, probe))
+    np.testing.assert_array_equal(a.model.calibrated.calibrated_classifiers_[0].calibrators[0].X_thresholds_, b.model.calibrated.calibrated_classifiers_[0].calibrators[0].X_thresholds_)
+    np.testing.assert_array_equal(a.model.calibrated.calibrated_classifiers_[0].calibrators[0].y_thresholds_, b.model.calibrated.calibrated_classifiers_[0].calibrators[0].y_thresholds_)
+
+
+def test_changing_a_label_that_is_known_on_the_date_does_change_the_model(cfg, delivered, tmp_path):
+    """The control of the probe above: what the date does let in moves the model, so the equality of the probe is not trivial."""
+    from tests.fixtures.model_helpers import small_cfg
+
+    config = small_cfg(cfg)
+    as_of = delivered[1][0].as_of
+    clean = connect(tmp_path / "clean.sqlite")
+    load_through(clean, delivered, config, 1)
+    changed = connect(tmp_path / "changed.sqlite")
+    load_through(changed, delivered, config, 1)
+    flipped = changed.execute(
+        "UPDATE raw_outcomes SET real_days = CASE WHEN real_days > (SELECT scheduled_days FROM raw_orders o WHERE o.order_id = raw_outcomes.order_id) THEN 0 ELSE 6 END, "
+        "source_label = 1 - source_label WHERE is_cancelled = 0 AND order_id IN (SELECT order_id FROM raw_orders WHERE order_date BETWEEN '2016-07-08' AND '2016-09-30')").rowcount
+    assert flipped > 100
+    a, b = trained_at(clean, as_of, config), trained_at(changed, as_of, config)
+    assert a.selection.losses != b.selection.losses and not a.valid_v2["risk"].equals(b.valid_v2["risk"])
 
 
 # --- the real file (real_data) -----------------------------------------------------------------------------------------------------------
