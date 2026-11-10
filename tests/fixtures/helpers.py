@@ -45,3 +45,12 @@ def load_through(conn, delivered, cfg, upto: int):
     for index in range(upto):
         result = load_delivery(conn, read_delivery(folder, entries[index]), plan[index], f"run-{plan[index].delivery_id}", cfg, sha256_json=entries[index].sha256_json)
     return result
+
+
+def rebuild_layers(conn, cfg, as_of) -> None:
+    """The staging tables and the marts for the date, without the controls, so that a test can look at what they would say."""
+    from latedel import warehouse
+
+    conn.execute("BEGIN IMMEDIATE")
+    warehouse._build_layers(conn, warehouse.sql_params(cfg, as_of))
+    conn.execute("COMMIT")

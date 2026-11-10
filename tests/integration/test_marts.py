@@ -15,7 +15,7 @@ import pytest
 from latedel import warehouse
 from latedel.deliveries import delivery_plan, publish, read_delivery
 from latedel.warehouse import CheckFailedError, apply_schema, connect, load_delivery, rebuild_at, run_checks, sql_params
-from tests.fixtures.helpers import file_digest, load_through
+from tests.fixtures.helpers import file_digest, load_through, rebuild_layers
 
 CHECKS = [
     "chk_label_definition", "chk_labelled_has_a_label", "chk_labelled_one_per_order", "chk_line_has_order", "chk_main_line_one_per_order", "chk_nothing_after_as_of", "chk_one_mode_per_order",
@@ -78,13 +78,6 @@ def add_outcome(conn, order_id: int, known: date, real_days: int = 2, label: int
 def violating(conn, cfg, as_of: date) -> dict[str, int]:
     """The controls with violations for the date, from ``run_checks`` as the load runs them."""
     return {c.check_id: c.violations for c in run_checks(conn, "load", sql_params(cfg, as_of)) if c.violations}
-
-
-def rebuild_layers(conn, cfg, as_of: date) -> None:
-    """The staging tables and the marts for the date, without the controls, so that a test can look at what they would say."""
-    conn.execute("BEGIN IMMEDIATE")
-    warehouse._build_layers(conn, sql_params(cfg, as_of))
-    conn.execute("COMMIT")
 
 
 # --- the labelled orders at a date exclude every outcome that is not known yet (AC12, AC15) ----------------------------------------
