@@ -36,18 +36,9 @@ from latedel.warehouse import (
     run_sql_file,
     split_statements,
 )
-from tests.fixtures.helpers import file_digest
+from tests.fixtures.helpers import file_digest, load_through
 
 TABLES = ("raw_orders", "raw_order_lines", "raw_outcomes", "deliveries", "pipeline_runs", "validation_results", "stg_orders", "stg_order_lines", "stg_outcomes")
-
-
-def load_through(conn, delivered, cfg, upto: int):
-    """Load the deliveries 0..upto-1 of the fixture through the runner; return the last ``LoadResult``."""
-    folder, plan, entries = delivered
-    result = None
-    for index in range(upto):
-        result = load_delivery(conn, read_delivery(folder, entries[index]), plan[index], f"run-{plan[index].delivery_id}", cfg, sha256_json=entries[index].sha256_json)
-    return result
 
 
 def dump(conn, table: str) -> list[tuple]:
@@ -325,9 +316,12 @@ def test_run_sql_file_never_commits_on_its_own(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0, "a rollback undoes the whole file: executescript() would have committed"
 
 
-def test_run_checks_counts_violations_samples_them_and_binds_parameters(tmp_path, monkeypatch):
+def test_run_checks_counts_violations_samples_them_and_binds_parameters(cfg, tmp_path, monkeypatch):
     conn = connect(tmp_path / "w.sqlite")
     apply_schema(conn)
+    conn.execute("BEGIN IMMEDIATE")
+    warehouse._build_layers(conn, warehouse.sql_params(cfg, date(2017, 1, 7)))
+    conn.execute("COMMIT")
     conn.executemany("INSERT INTO raw_orders VALUES (?, 'd', 't', '2017-01-01', 'pre_break', 'First Class', 1, 'p', 'm', 'r', 'c', 's', 'cc')", [(i,) for i in range(1, 9)])
     with_extra_checks(
         tmp_path, monkeypatch, chk_many="SELECT order_id FROM raw_orders WHERE order_id > :limit;\n", chk_none="SELECT order_id FROM raw_orders WHERE order_id > 100;\n")
@@ -337,14 +331,17 @@ def test_run_checks_counts_violations_samples_them_and_binds_parameters(tmp_path
     assert by_name["chk_none"].sample == [] and [c.check_id for c in results] == sorted(by_name)
 
 
-def test_run_checks_refuses_an_unknown_group_and_a_file_with_two_statements(tmp_path, monkeypatch):
+def test_run_checks_refuses_an_unknown_group_and_a_file_with_two_statements(cfg, tmp_path, monkeypatch):
     conn = connect(tmp_path / "w.sqlite")
     apply_schema(conn)
+    conn.execute("BEGIN IMMEDIATE")
+    warehouse._build_layers(conn, warehouse.sql_params(cfg, date(2017, 1, 7)))
+    conn.execute("COMMIT")
     with pytest.raises(ValueError, match="grupo de controles desconocido: 'sales'"):
         run_checks(conn, "sales")  # type: ignore[arg-type]
     with_extra_checks(tmp_path, monkeypatch, chk_two="SELECT 1 WHERE 0; SELECT 2 WHERE 0;\n")
     with pytest.raises(ValueError, match=r"chk_two\.sql debe tener exactamente un SELECT"):
-        run_checks(conn, "load")
+        run_checks(conn, "load", warehouse.sql_params(cfg, date(2017, 1, 7)))
 
 
 def test_the_schema_is_idempotent_keeps_the_data_and_refuses_a_table_that_drifted(tmp_path):

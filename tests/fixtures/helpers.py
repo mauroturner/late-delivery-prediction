@@ -33,3 +33,15 @@ def mark_loaded(conn: sqlite3.Connection, spec, frames, status: str = "loaded") 
 
 def file_digest(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def load_through(conn, delivered, cfg, upto: int):
+    """Load the deliveries 0..upto-1 of the published fixture (``delivered``) through the runner of the warehouse; return the last ``LoadResult``."""
+    from latedel.deliveries import read_delivery
+    from latedel.warehouse import load_delivery
+
+    folder, plan, entries = delivered
+    result = None
+    for index in range(upto):
+        result = load_delivery(conn, read_delivery(folder, entries[index]), plan[index], f"run-{plan[index].delivery_id}", cfg, sha256_json=entries[index].sha256_json)
+    return result

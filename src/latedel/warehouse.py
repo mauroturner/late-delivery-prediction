@@ -38,7 +38,7 @@ CHECK_GROUPS = ("load", "model")
 SAMPLE_LIMIT = 5
 BUSY_TIMEOUT_MS = 30_000  # an overlapping run waits this long for the write lock before failing
 STAGING = ("staging/stg_orders.sql", "staging/stg_order_lines.sql", "staging/stg_outcomes.sql")   # in this order: the lines read stg_orders
-OPS_MARTS: tuple[str, ...] = ()
+OPS_MARTS = ("marts/ops/mart_main_line.sql", "marts/ops/mart_labelled_orders.sql")
 _RAW = (("raw_orders", ORDERS_SCHEMA, "orders"), ("raw_order_lines", ORDER_LINES_SCHEMA, "order_lines"), ("raw_outcomes", OUTCOMES_SCHEMA, "outcomes"))
 RUN_COLUMNS = (
     "started_at", "finished_at", "status", "delivery_id", "as_of_date", "source_sha256", "orders_delivery", "outcomes_delivery", "orders_scored", "alerts",
@@ -324,6 +324,31 @@ def load_delivery(
     return LoadResult(spec.delivery_id, spec.as_of, loaded["orders"], loaded["order_lines"], loaded["outcomes"], staged, checks)
 
 
+def rebuild_at(conn: sqlite3.Connection, as_of: date, cfg: PipelineConfig) -> list[CheckResult]:
+    """Rebuild the staging tables and the operational marts for the calculation date `as_of` from the raw tables, which are not touched.
+
+    This is how anything that is computed for a date gets what was known on it, whatever the warehouse holds since (RNF06): the staging tables take the
+    orders created up to the date and the outcomes known up to it, and the labelled orders only those with such an outcome. It is one transaction, with the
+    controls of the load: a control with violations undoes it (``CheckFailedError``). Returns the results of the controls.
+    """
+    params = sql_params(cfg, as_of)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        apply_schema(conn)
+        _build_layers(conn, params)
+        checks = run_checks(conn, "load", params)
+        failing = [c for c in checks if c.violations]
+        if failing:
+            raise CheckFailedError(checks)
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    logger.info("rebuilt the staging tables and the marts at %s", as_of)
+    return checks
+
+
 # --- run records ------------------------------------------------------------------------------------------------------------
 
 
@@ -360,3 +385,4 @@ def record_validation_results(conn: sqlite3.Connection, report: ValidationReport
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
+
