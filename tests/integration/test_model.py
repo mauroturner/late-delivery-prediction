@@ -167,9 +167,9 @@ def test_a_category_not_seen_in_training_is_missing_not_an_error(cfg, launch_con
 
 
 @pytest.mark.real_data
-def test_real_launch_selection_calibration_and_validation_scores(cfg, real_launch_conn):
+def test_real_launch_selection_calibration_and_validation_scores(cfg, real_launch_conn, real_trained):
     launch = cfg.deliveries.launch_date
-    trained = train_model(real_launch_conn, launch, cfg)
+    trained = real_trained
     rates = baseline_rates(labelled_orders(real_launch_conn, launch, cfg), cfg)
     chosen = trained.selection.chosen
     losses = {f"{c.feature_set}/{c.learning_rate}/{c.max_leaf_nodes}/{c.min_samples_leaf}": round(v, 5) for c, v in trained.selection.losses}

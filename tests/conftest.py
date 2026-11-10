@@ -179,3 +179,16 @@ def control_run(cfg, tmp_path_factory: pytest.TempPathFactory):
         return cache[signal]
 
     return build
+
+
+@pytest.fixture(scope="session")
+def real_trained(cfg, real_launch_db: Path, tmp_path_factory: pytest.TempPathFactory):
+    """The model of the real launch (24 candidates fitted on the training block, selected and calibrated on V1), trained once per session. Needs the real CSV."""
+    from latedel.model import train_model
+    from latedel.warehouse import connect
+
+    conn = connect(real_launch_db)
+    try:
+        return train_model(conn, cfg.deliveries.launch_date, cfg)
+    finally:
+        conn.close()
