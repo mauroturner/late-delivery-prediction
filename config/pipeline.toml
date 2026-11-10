@@ -1,0 +1,87 @@
+# Complete configuration of the pipeline (plan section 4). Every relative path is resolved against the project folder (decision D24).
+# Unknown, missing or mistyped keys are refused with the key's name; so are keys that the chosen mode would ignore (decision D29 of project 02).
+
+[source]
+mode = "http"                        # "http" or "local"
+url = "https://data.mendeley.com/public-files/datasets/8gx2fvg2k6/files/72784be5-36d3-44fe-b75d-0edbf1999f65/file_downloaded"
+allowed_hosts = ["data.mendeley.com", ".amazonaws.com"]   # an exact host name, or a suffix when it starts with a dot (V02)
+max_redirects = 3
+local_path = ""                      # local mode: path of the CSV (relative to the project folder)
+accepted_sha256 = "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6"   # http mode (V01); empty in local mode
+file_name = "DataCoSupplyChainDataset.csv"
+encoding = "cp1252"
+max_bytes = 134217728                # 128 MiB (V02)
+chunk_bytes = 1048576
+timeout_s = 120
+
+[deliveries]
+first_order_date = 2015-01-01
+launch_date = 2017-01-07             # end of the launch load
+last_order_date = 2018-01-31
+close_date = 2018-02-07              # last day of outcomes
+
+[split]                              # D08
+train_start = 2015-01-01
+train_end = 2016-06-30
+purge_days = 7
+valid_start = 2016-07-08
+valid_v2_start = 2016-10-01          # V1 = [valid_start, valid_v2_start); V2 = [valid_v2_start, valid_end]
+valid_end = 2016-12-31
+test_start = 2017-01-08
+test_end = 2017-09-30
+post_break_start = 2017-10-01
+post_break_end = 2018-01-31
+
+[features]
+candidate_sets = ["f0", "f1", "f2"]  # names; the columns of each are in features.py (D11)
+noon_hour = 12                       # cut of B5 (D15)
+
+[model]                              # D12
+learning_rate = [0.05, 0.1]
+max_leaf_nodes = [15, 31]
+min_samples_leaf = [20, 100]
+l2_regularization = 1.0
+max_iter = 300
+random_state = 0
+calibration = "isotonic"
+model_version = "v1"
+
+[costs]                              # declared assumptions, in generic cost units (D14)
+alert_cost = 5.0
+late_cost = 20.0
+effect = 0.5
+threshold_min = 0.01
+threshold_max = 0.99
+threshold_step = 0.01
+sensitivity_min = 0.10
+sensitivity_max = 0.90
+sensitivity_step = 0.05
+
+[evaluation]
+bootstrap_resamples = 1000
+bootstrap_seed = 0
+calibration_bins = 10
+roc_points = 200
+importance_repeats = 5
+
+[criteria]                           # preregistered (requirements.md 8.1, D16)
+c06_max_ece = 0.03
+c06_max_bias = 0.02
+leak_tripwire_auc = 0.95             # M01 (D36)
+
+[site]
+max_total_bytes = 204800
+min_cell_orders = 20
+
+[paths]
+raw_dir = "data/raw"
+interim_dir = "data/interim"
+warehouse = "data/warehouse/latedel.sqlite"
+models_dir = "data/models"
+outputs_dir = "outputs/powerbi"
+site_dir = "outputs/site"
+reports_dir = "reports"
+seal = "reports/model_seal.json"
+dashboard_html = "dashboard/powerbi-design.html"
+readme = "README.md"
+figures_dir = "docs/figures"

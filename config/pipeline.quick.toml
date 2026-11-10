@@ -1,0 +1,38 @@
+# Quick mode for tests and development: the same pipeline on the synthetic fixture instead of the real CSV.
+# Starts from pipeline.toml (same folder) and overrides only what is listed here.
+#
+#   python -m latedel make-fixture data/quick/dataco_fixture.csv
+#   python -m latedel replay --config config/pipeline.quick.toml
+#
+# Everything the quick run reads and writes is under data/quick/ (git-ignored), resolved against the project folder:
+# it never touches the warehouse, the Parquet files, the HTML design, the reports, the seal or the README of the full run,
+# which are versioned, and it does not depend on the directory it is started from. The fixture covers the same calendar as
+# the source, so the dates do not change.
+extends = "pipeline.toml"
+
+[source]
+mode = "local"
+url = ""                             # a local source has no address: this key would be ignored (decision D29 of project 02)
+local_path = "data/quick/dataco_fixture.csv"
+accepted_sha256 = ""
+
+[model]                              # one configuration instead of the grid of eight
+learning_rate = [0.1]
+max_leaf_nodes = [15]
+min_samples_leaf = [20]
+
+[evaluation]
+bootstrap_resamples = 200
+
+[paths]
+raw_dir = "data/quick/raw"
+interim_dir = "data/quick/interim"
+warehouse = "data/quick/latedel.sqlite"
+models_dir = "data/quick/models"
+outputs_dir = "data/quick/outputs/powerbi"
+site_dir = "data/quick/outputs/site"
+reports_dir = "data/quick/reports"
+seal = "data/quick/reports/model_seal.json"
+dashboard_html = "data/quick/dashboard/powerbi-design.html"
+readme = "data/quick/README.md"
+figures_dir = "data/quick/figures"

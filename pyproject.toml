@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latedel"
+version = "0.1.0"
+description = "Late deliveries: calibrated risk per order at creation time, a cost-based alert threshold and monthly tracking on the DataCo supply chain dataset."
+# 3.11 on the developer machine (Windows) and 3.13 in the apache/airflow:3.4.0 image (decision D28).
+requires-python = ">=3.11,<3.14"
+# Runtime and development dependencies are pinned in requirements.txt and requirements-dev.txt (decision D28).
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# "src" makes the package importable without installing it; "." makes tests.fixtures importable.
+pythonpath = ["src", "."]
+addopts = "-ra --strict-markers --import-mode=importlib -m 'not real_data and not docker'"
+markers = [
+    "real_data: needs the real CSV in data/raw/ (skipped by default)",
+    "docker: needs Docker (skipped by default)",
+    "slow: takes more than a few seconds",
+]

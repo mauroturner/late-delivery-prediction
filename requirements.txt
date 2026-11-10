@@ -1,0 +1,27 @@
+# Runtime dependencies, pinned with == (decision D28). The same set as project 01 after its L28 fix: it installs on
+# Python 3.11 (Windows) and on Python 3.13 (the apache/airflow:3.4.0 image). python-dateutil stays at 2.9.0.post0 with six 1.17.0:
+# version 4.x conflicts with Airflow's own dependencies (project 01 D44, project 02 D55).
+# Direct dependencies first, then the transitive ones. There are no --hash entries on purpose: in a single pip install of
+# the image, hash-checking mode would also apply to apache-airflow, which has none here (project 02, D55).
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.1
+pyarrow==26.0.1
+matplotlib==3.11.2
+# transitive
+cloudpickle==3.1.2
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.68.0
+joblib==1.6.0
+kiwisolver==1.5.1
+narwhals==2.28.0
+packaging==26.3
+pillow==13.0.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+pytz==2026.6
+six==1.17.0
+threadpoolctl==3.8.0
+tzdata==2026.6
