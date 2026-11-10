@@ -109,3 +109,58 @@ def delivered(cfg, fixture_read, tmp_path_factory: pytest.TempPathFactory):
     plan = delivery_plan(cfg.deliveries)
     entries = [publish(spec, fixture_read[0], folder, source_sha256="ab" * 32) for spec in plan]
     return folder, plan, entries
+
+
+# --- warehouses of the synthetic fixture, built once per session and copied by the tests that write -------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def launch_db(cfg, delivered, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A warehouse of the synthetic fixture that holds only the launch delivery (the test block does not exist in it). Tests that write copy it first."""
+    from latedel.warehouse import connect
+    from tests.fixtures.helpers import load_through
+
+    path = tmp_path_factory.mktemp("launch_db") / "launch.sqlite"
+    conn = connect(path)
+    load_through(conn, delivered, cfg, 1)
+    conn.close()
+    return path
+
+
+@pytest.fixture()
+def launch_conn(launch_db: Path, tmp_path: Path):
+    """A connection to a private copy of ``launch_db``."""
+    from latedel.warehouse import connect
+
+    target = tmp_path / "launch_copy.sqlite"
+    shutil.copyfile(launch_db, target)
+    conn = connect(target)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture(scope="session")
+def real_launch_db(cfg, real_read, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A warehouse of the real file that holds only the launch delivery: the test labels are physically absent (D17). Needs the real CSV."""
+    from latedel.deliveries import delivery_plan, publish, read_delivery
+    from latedel.warehouse import connect, load_delivery
+
+    folder = tmp_path_factory.mktemp("real_launch")
+    spec = delivery_plan(cfg.deliveries)[0]
+    entry = publish(spec, real_read[0], folder / "deliveries", source_sha256=cfg.source.accepted_sha256)
+    conn = connect(folder / "real_launch.sqlite")
+    load_delivery(conn, read_delivery(folder / "deliveries", entry), spec, f"real-{spec.delivery_id}", cfg, sha256_json=entry.sha256_json)
+    conn.close()
+    return folder / "real_launch.sqlite"
+
+
+@pytest.fixture()
+def real_launch_conn(real_launch_db: Path, tmp_path: Path):
+    """A connection to a private copy of ``real_launch_db``."""
+    from latedel.warehouse import connect
+
+    target = tmp_path / "real_launch_copy.sqlite"
+    shutil.copyfile(real_launch_db, target)
+    conn = connect(target)
+    yield conn
+    conn.close()
