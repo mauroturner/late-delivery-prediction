@@ -35,7 +35,7 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -134,6 +134,8 @@ class SourceReport:
     leaking_columns_moved: int
     constant_or_duplicate_columns: int
     counts: dict[str, dict[str, int]]
+    # rule id -> {"rows": lines, "orders": orders} that the warning and information rules V10 to V14 and V17 affect (decision D43)
+    affected: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 # --- reading -----------------------------------------------------------------------------------------------------
@@ -281,6 +283,8 @@ def read_source(path: Path, cfg: PipelineConfig) -> tuple[SourceFrames, SourceRe
     order_of_line: list[int] = []
     differing: dict[int, set[str]] = {}
     pair_discrepancies = 0
+    pair_lines: set[int] = set()
+    pair_orders: set[int] = set()
     rows = 0
     bad_rows = 0
     i_order, i_item = _COLUMN_INDEX["Order Id"], _COLUMN_INDEX["Order Item Id"]
@@ -358,6 +362,8 @@ def read_source(path: Path, cfg: PipelineConfig) -> tuple[SourceFrames, SourceRe
             for a, b in _PAIR_INDEX:
                 if row[a] != row[b] and float(row[a]) != float(row[b]):
                     pair_discrepancies += 1
+                    pair_lines.add(item_id)
+                    pair_orders.add(order_id)
             if not (v05 or v06 or v07 or differing):
                 for store, index in zip(kept, _LINE_INDEX, strict=True):
                     store.append(row[index])
@@ -375,7 +381,7 @@ def read_source(path: Path, cfg: PipelineConfig) -> tuple[SourceFrames, SourceRe
     if v07 or differing:
         raise _v07_error(v07, differing)
 
-    frames, report = _build(cfg, size, first, kept, order_of_line, pair_discrepancies)
+    frames, report = _build(cfg, size, first, kept, order_of_line, pair_discrepancies, len(pair_lines), len(pair_orders))
     logger.info(
         "read source: %d lines in %d orders (%d cancelled), %d bytes; %d personal columns dropped",
         report.lines, report.orders, report.cancelled_orders, report.size_bytes, report.personal_columns_dropped,
@@ -410,7 +416,7 @@ def _stamps(values: list[str] | pd.Series) -> pd.Series:
 
 
 def _build(cfg: PipelineConfig, size: int, first: dict[int, tuple[str, ...]], kept: list[list[str]], order_of_line: list[int],
-           pair_discrepancies: int) -> tuple[SourceFrames, SourceReport]:
+           pair_discrepancies: int, pair_lines: int = 0, pair_orders: int = 0) -> tuple[SourceFrames, SourceReport]:
     position = _ORDER_LEVEL_POSITION
     ids = np.fromiter(first.keys(), dtype=np.int64, count=len(first))
     values = list(first.values())
@@ -454,7 +460,9 @@ def _build(cfg: PipelineConfig, size: int, first: dict[int, tuple[str, ...]], ke
     })
     benefit = pd.DataFrame({"order_id": lines["order_id"], "benefit": np.array(kept[12], dtype=np.float64), "ratio": np.array(kept[13], dtype=np.float64)})
     trimmed = lines["product_name"].str.rstrip()
-    trailing_lines = int((trimmed != lines["product_name"]).sum())
+    has_trailing = trimmed != lines["product_name"]
+    trailing_lines = int(has_trailing.sum())
+    trailing_orders = int(lines.loc[has_trailing, "order_id"].nunique())
     lines["product_name"] = trimmed
     lines = lines.sort_values(["order_id", "line_id"], kind="stable").reset_index(drop=True)
     sums = benefit.groupby("order_id", sort=True).agg(benefit_total=("benefit", "sum"), profit_ratio_mean=("ratio", "mean"))
@@ -505,7 +513,18 @@ def _build(cfg: PipelineConfig, size: int, first: dict[int, tuple[str, ...]], ke
     cancelled_lines = int(lines["order_id"].isin(cancelled_ids).sum())
     sales_gap = (lines["product_price"] * lines["quantity"] - lines["sales"]).abs() > MONEY_TOLERANCE
     total_gap = (lines["sales"] - lines["discount"] - lines["item_total"]).abs() > MONEY_TOLERANCE
-    off_schedule = int((orders["shipping_mode"].map(SCHEDULED_DAYS_BY_MODE) != orders["scheduled_days"]).sum())
+    off_schedule_mask = orders["shipping_mode"].map(SCHEDULED_DAYS_BY_MODE) != orders["scheduled_days"]
+    off_schedule = int(off_schedule_mask.sum())
+    gap = sales_gap | total_gap
+    post_break_ids = set(orders.loc[orders["regime"] == "post_break", "order_id"])
+    affected = {
+        "V10": {"rows": int(lines["order_id"].isin(set(orders.loc[off_schedule_mask, "order_id"])).sum()), "orders": off_schedule},
+        "V11": {"rows": cancelled_lines, "orders": n_cancelled},
+        "V12": {"rows": pair_lines, "orders": pair_orders},
+        "V13": {"rows": int(gap.sum()), "orders": int(lines.loc[gap, "order_id"].nunique())},
+        "V14": {"rows": trailing_lines, "orders": trailing_orders},
+        "V17": {"rows": int(lines["order_id"].isin(post_break_ids).sum()), "orders": len(post_break_ids)},
+    }
     counts = {
         "rows": {"lines": len(lines), "orders": len(orders), "cancelled_orders": n_cancelled, "cancelled_lines": cancelled_lines,
                  "task_orders": len(orders) - n_cancelled},
@@ -523,7 +542,7 @@ def _build(cfg: PipelineConfig, size: int, first: dict[int, tuple[str, ...]], ke
         size_bytes=size, lines=len(lines), orders=len(orders), cancelled_orders=n_cancelled, cancelled_lines=cancelled_lines,
         task_orders=len(orders) - n_cancelled, first_order_date=orders["order_date"].min().date(), last_order_date=orders["order_date"].max().date(),
         max_outcome_lag_days=int(lag.max()), personal_columns_dropped=len(PERSONAL_COLUMNS), leaking_columns_moved=len(LEAKING_COLUMNS),
-        constant_or_duplicate_columns=len(DUPLICATE_OR_CONSTANT_COLUMNS), counts=counts,
+        constant_or_duplicate_columns=len(DUPLICATE_OR_CONSTANT_COLUMNS), counts=counts, affected=affected,
     )
     return SourceFrames(orders, lines, outcomes), report
 
@@ -584,7 +603,7 @@ def interim_fingerprint(interim_dir: Path) -> str | None:
         found.add(value)
     if len(found) != 1:
         return None
-    if _metadata(Path(interim_dir) / "orders.parquet").get(SOURCE_REPORT_KEY) is None:
+    if load_source_report(interim_dir) is None:  # no report, or one of an older layout: the streams are rebuilt
         return None
     return found.pop().decode("ascii")
 
@@ -595,6 +614,8 @@ def load_source_report(interim_dir: Path) -> SourceReport | None:
     if raw is None:
         return None
     document = json.loads(raw)
+    if "affected" not in document:  # written before the rows and orders of each rule were counted (decision D43)
+        return None
     document["first_order_date"] = date.fromisoformat(document["first_order_date"])
     document["last_order_date"] = date.fromisoformat(document["last_order_date"])
     return SourceReport(**document)
