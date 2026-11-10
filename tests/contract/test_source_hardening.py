@@ -264,3 +264,26 @@ def test_a_set_that_is_read_back_is_the_set_that_was_written(fixture_read, tmp_p
     for name in ("orders", "order_lines", "outcomes"):
         assert len(getattr(back, name)) == len(getattr(frames, name))
     assert back.orders["order_id"].tolist() == frames.orders["order_id"].tolist() and back.outcomes["real_days"].tolist() == frames.outcomes["real_days"].tolist()
+
+
+# --- H2, R4-interim-rehash-every-run: what the check of the manifest costs on the real set --------------------------------------------------------------
+
+
+@pytest.mark.real_data
+def test_the_check_of_the_interim_manifest_on_the_real_set_costs_milliseconds_not_seconds(cfg, real_read, tmp_path):
+    """The three files are hashed whole on every run (decision D50). Measured on the development machine: the real set is 5.8 MB (orders 1.0, lines 2.9,
+    outcomes 1.8) and the check takes about 5 ms against 5.3 s to read the CSV and 0.1 s to read the three files; it grows with the size of the set at the rate
+    of SHA-256 (about 1 GB/s here). The bound below is a hundred times what was measured: it fails if the check ever turns into a real cost."""
+    import time
+
+    frames, report = real_read
+    write_interim(frames, report, tmp_path, cfg.source.accepted_sha256)
+    size = sum(p.stat().st_size for p in tmp_path.glob("*.parquet"))
+    runs = []
+    for _ in range(5):
+        started = time.perf_counter()
+        assert ingest._interim_problem(tmp_path) is None
+        runs.append(time.perf_counter() - started)
+    median = sorted(runs)[len(runs) // 2]
+    print(f"REAL interim set {size / 1e6:.2f} MB, manifest check median {median * 1000:.1f} ms")
+    assert size < 10_000_000 and median < 0.5

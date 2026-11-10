@@ -94,3 +94,25 @@ def test_the_task_refuses_a_mode_that_is_neither_http_nor_local_instead_of_treat
     with pytest.raises(ValueError, match=r"\[source\] mode.*'ftp'"):
         fetch_source(ctx)
     assert not (tmp_path / "raw").exists() and not (tmp_path / "interim").exists(), "nothing was read and nothing was written"
+
+
+# --- H2, R4-overall-deadline-throughput-floor: the comment of max_seconds states the slowest link that can finish ------------------------------------------
+
+PINNED_FILE_BYTES = 95_910_149          # the CSV of Mendeley, version 5 (research.md; the hash in the configuration pins it)
+
+
+def test_the_comment_of_max_seconds_states_the_throughput_floor_it_implies(cfg, project_root):
+    """900 s for at most 128 MiB is a floor on the speed of the link: below 149 kB/s a download of the largest size allowed cannot end, and below 107 kB/s the
+    pinned file cannot. Before the deadline, a link of any speed that was never silent for a whole read timeout finished; now it must keep that pace. The
+    comment says so, in numbers computed from the configuration, so that changing the deadline or the cap without changing the comment fails."""
+    line = next(row for row in (project_root / "config" / "pipeline.toml").read_text(encoding="utf-8").splitlines() if row.startswith("max_seconds"))
+    cap = cfg.source.max_bytes / cfg.source.max_seconds / 1000
+    pinned = PINNED_FILE_BYTES / cfg.source.max_seconds / 1000
+    assert f"{cap:.0f} kB/s" in line and f"{pinned:.0f} kB/s" in line, line
+    assert "docs/runbook.md" in line and "R2" in line and "D49" in line, "and where to read what to do on a slower link"
+    assert round(cap) == 149 and round(pinned) == 107
+
+
+@pytest.mark.real_data
+def test_the_pinned_size_of_the_comment_is_the_size_of_the_real_file(project_root):
+    assert (project_root / "data" / "raw" / "DataCoSupplyChainDataset.csv").stat().st_size == PINNED_FILE_BYTES

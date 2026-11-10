@@ -15,7 +15,7 @@ encoding = "cp1252"
 max_bytes = 134217728                # 128 MiB (V02)
 chunk_bytes = 1048576
 timeout_s = 120                      # connection and each read (V02)
-max_seconds = 900                    # the whole download, redirects included: a source that drips bytes cannot hold the task longer (decision D49)
+max_seconds = 900                    # the whole download, redirects included: a source that drips bytes cannot hold the task longer (decision D49). It is also a floor on the speed of the link: 128 MiB in 900 s needs 149 kB/s and the pinned file (95,910,149 bytes) 107 kB/s; on a slower link raise it (docs/runbook.md, R2)
 
 [deliveries]
 first_order_date = 2015-01-01

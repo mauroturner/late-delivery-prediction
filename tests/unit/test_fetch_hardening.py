@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -197,35 +198,40 @@ def test_a_stored_report_that_is_not_there_when_read_makes_the_task_rebuild_not_
 # --- R3-concurrent-staging-untested: two overlapping calls on one destination -------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("bad_pause", "good_pause", "expected"), [
-    (0.06, 0.02, ["f.csv", "f.csv.part"]),      # the accepted download finishes first: the other one then keeps its whole body as the part
-    (0.02, 0.06, ["f.csv"]),                    # the other one finishes first: the accepted one then supersedes the part that it left (documented in U04)
+@pytest.mark.parametrize(("first", "expected"), [
+    ("good", ["f.csv", "f.csv.part"]),      # the accepted download finishes first: the other one then keeps its whole body as the part
+    ("bad", ["f.csv"]),                     # the other one finishes first: the accepted one then supersedes the part that it left (documented in U04)
 ])
-def test_two_downloads_of_one_destination_at_the_same_time_never_mix_their_bytes(tmp_path, bad_pause, good_pause, expected):
+def test_two_downloads_of_one_destination_at_the_same_time_never_mix_their_bytes(tmp_path, first, expected):
     """One call gets the accepted body, the other a body with another hash, both at once to the same destination. Whatever the order in which they finish,
     the accepted file is the verified one, whole; a part, if there is one, is the other body, whole; neither leaves a staging file. (Two calls that both
     succeed replace each other with the same verified bytes; that case is not asserted because Windows may refuse the second rename while the first file is
-    being replaced.)"""
+    being replaced.)
+
+    The order is set by events, not by time (R3-concurrent-staging-timing-flake): each server sends half of its body and waits at a gate; the test waits until
+    both calls are in the middle of their download, opens the gate of the one that must finish first, waits for it to end, and only then opens the other."""
     from latedel.schema import SourceError
 
     wrong = BODY + b"another body, another hash"
-    barrier = threading.Barrier(2)
     outcomes: dict[str, object] = {}
 
-    def run(name: str, server: FileServer, pause: float) -> None:
-        barrier.wait()
+    def run(name: str, url: str) -> None:
         try:
-            outcomes[name] = download_file(
-                server.url(f"/drip?step=100&pause={pause}"), tmp_path / "raw" / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=30, insecure_hosts=LOCAL)
+            outcomes[name] = download_file(url, tmp_path / "raw" / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=60, insecure_hosts=LOCAL)
         except Exception as error:  # noqa: BLE001 - the outcome is what the test inspects
             outcomes[name] = error
 
     with FileServer(BODY) as good, FileServer(wrong) as bad:
-        threads = [threading.Thread(target=run, args=("good", good, good_pause)), threading.Thread(target=run, args=("bad", bad, bad_pause))]
-        for thread in threads:
+        servers = {"good": good, "bad": bad}
+        gates = {"good": good.gate("g"), "bad": bad.gate("b")}
+        threads = {name: threading.Thread(target=run, args=(name, servers[name].url(f"/gated?id={name[0]}"))) for name in servers}
+        for thread in threads.values():
             thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
+        assert all(gate.started.wait(timeout=20) for gate in gates.values()), "both downloads are in the middle of their body"
+        for name in (first, "bad" if first == "good" else "good"):
+            gates[name].release.set()
+            threads[name].join(timeout=30)
+            assert not threads[name].is_alive(), f"{name} finished before the other one was let go"
     assert outcomes["good"][1] == GOOD and isinstance(outcomes["bad"], SourceError) and outcomes["bad"].rule_id == "V01"
     raw = tmp_path / "raw"
     assert (raw / "f.csv").read_bytes() == BODY, "the accepted file is the good body, complete"
@@ -244,3 +250,79 @@ def test_the_staging_names_of_two_calls_never_collide(tmp_path):
         os.close(descriptor)
         names.add(path.name)
     assert len(names) == 50 and all(n.endswith(".staging") for n in names)
+
+
+# --- H2: the advisories of the native review of H1 ----------------------------------------------------------------------------------------------------
+
+
+# R4-deadline-error-missing-hop-context: the message of the deadline says which host was in progress
+
+from tests.fixtures.http_server import ALT_HOST  # noqa: E402
+
+BOTH = frozenset({"127.0.0.1", ALT_HOST})
+
+
+def test_the_deadline_during_a_redirect_chain_names_the_hop_and_the_host_that_used_the_time(tmp_path):
+    """The first hop (127.0.0.1) answers at once with a redirect to the second host (127.0.0.2), which hangs: the error says that the second hop was waited for."""
+    with FileServer(BODY, delay_s=3.0) as server:
+        target = urllib.parse.quote(server.url("/hang", host=ALT_HOST), safe="")
+        with pytest.raises(DownloadDeadlineError) as error:
+            download_file(server.url(f"/redirect?to={target}"), tmp_path / "f.csv", GOOD, ["127.0.0.1", ALT_HOST], 3, 10**7, 1000, 30, max_seconds=0.5, insecure_hosts=BOTH)
+    text = str(error.value)
+    assert f"salto 2 ({ALT_HOST})" in text and "127.0.0.1)" not in text, text
+    assert "tiempo máximo de 0.5 s" in text and "docs/runbook.md, R2" in text
+    assert leftovers(tmp_path) == []
+
+
+def test_the_deadline_while_the_body_is_being_received_names_the_host_and_the_bytes(tmp_path):
+    with FileServer(BODY) as server:
+        with pytest.raises(DownloadDeadlineError) as error:
+            download_file(server.url(DRIP), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=0.5, insecure_hosts=LOCAL)
+    assert re.search(r"tras recibir \d+ bytes de 127\.0\.0\.1", str(error.value)), str(error.value)
+    assert "salto" not in str(error.value)
+
+
+def test_a_deadline_already_spent_names_the_hop_that_was_not_requested(tmp_path):
+    with FileServer(BODY) as server:
+        with pytest.raises(DownloadDeadlineError, match=r"salto 1 \(127\.0\.0\.1\)"):
+            download_file(server.url("/file.csv"), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=1e-9, insecure_hosts=LOCAL)
+        assert server.requests == []
+
+
+def test_the_error_without_a_host_is_the_one_it_was_before(tmp_path):
+    """The previous message, with no place: what ``_deadline_error`` says when it is not told one."""
+    assert str(ingest._deadline_error(5.0)) == (
+        "La descarga superó el tiempo máximo de 5 s (source.max_seconds); se interrumpió y no se guardó nada. "
+        "Si el origen es lento, se puede subir ese límite; si no responde, ver docs/runbook.md, R2."
+    )
+    assert str(ingest._deadline_error(5.0, 12)) == (
+        "La descarga superó el tiempo máximo de 5 s (source.max_seconds) tras recibir 12 bytes; se interrumpió y no se guardó nada. "
+        "Si el origen es lento, se puede subir ese límite; si no responde, ver docs/runbook.md, R2."
+    )
+
+
+# R3-single-bucket-host-allowlist-fragility: a host that is not on the list says what to do if the source moved
+
+
+def test_a_redirect_to_a_host_that_is_not_on_the_list_says_where_to_look_if_the_bucket_changed(tmp_path):
+    from latedel.schema import SourceError
+
+    with FileServer(BODY) as server:
+        target = urllib.parse.quote(server.url("/file.csv", host=ALT_HOST), safe="")
+        with pytest.raises(SourceError) as error:
+            download_file(server.url(f"/redirect?to={target}"), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, insecure_hosts=BOTH)
+    text = str(error.value)
+    assert text.startswith("V02:") and f"el host '{ALT_HOST}'" in text and "no está en la lista de hosts permitidos" in text
+    assert "[source] allowed_hosts" in text and "docs/runbook.md, R2 y R11" in text
+    assert error.value.problems[0]["host"] == ALT_HOST and leftovers(tmp_path) == []
+
+
+# R3-deadline-slack-timer-assumption: the slack is pinned against the timer, with the numbers that were measured
+
+
+def test_the_deadline_slack_covers_more_than_two_ticks_of_the_coarsest_timer_and_stays_small():
+    """Windows ticks every 15.6 ms. Measured on the development machine over 172 socket timeouts of 0.02 to 1 s: none fired early, all 4 to 29 ms late (a
+    lateness is never misread: a timeout after the deadline is the deadline). The slack of 50 ms is more than three ticks, and short enough that a timeout
+    that really was a read timeout, far from the deadline, stays one."""
+    tick = 0.015625
+    assert 2 * tick < ingest.DEADLINE_SLACK_S <= 0.1

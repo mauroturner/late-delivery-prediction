@@ -18,6 +18,9 @@ Routes (every request is recorded in ``requests`` as ``(method, path, headers)``
 - ``/huge``: announces a ``Content-Length`` of a terabyte and sends nothing; ``/endless``: no ``Content-Length`` and a body that never ends;
 - ``/drip?step=<bytes>&pause=<seconds>``: the whole body with its ``Content-Length``, ``step`` bytes at a time with ``pause`` seconds between them: a source
   that is slow but never silent for long, which only an overall deadline stops.
+- ``/gated?id=<name>``: the whole body with its ``Content-Length``, but only its first half until the test opens the gate of that name
+  (``server.gate(name).release.set()``); ``server.gate(name).started`` is set when the first half has been sent. It orders overlapping downloads by events and
+  not by time (no sleeps), so a test can say which of two finishes first whatever the load of the machine.
 """
 
 from __future__ import annotations
@@ -31,6 +34,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 POLL_INTERVAL_S = 0.01
 ALT_HOST = "127.0.0.2"
 ENDLESS_LIMIT = 64 * 1024 * 1024
+GATE_TIMEOUT_S = 30.0       # a gate that nobody opens frees its connection after this long, so that a failed test does not hang the server
+
+
+class Gate:
+    """The two events of a ``/gated`` route: the server sets ``started`` after the first half of the body, and sends the rest when the test sets ``release``."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
 
 
 class _Server(ThreadingHTTPServer):
@@ -45,6 +57,8 @@ class FileServer:
         self.body = body
         self.delay_s = delay_s
         self.requests: list[tuple[str, str, dict[str, str]]] = []
+        self._gates: dict[str, Gate] = {}
+        self._gates_lock = threading.Lock()
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -130,6 +144,22 @@ class FileServer:
                     except OSError:
                         pass
                     self.close_connection = True
+                elif path == "/gated":
+                    gate = outer.gate(query["id"][0])
+                    half = len(outer.body) // 2
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(outer.body)))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(outer.body[:half])
+                        self.wfile.flush()
+                        gate.started.set()
+                        if gate.release.wait(timeout=GATE_TIMEOUT_S):
+                            self.wfile.write(outer.body[half:])
+                            self.wfile.flush()
+                    except OSError:
+                        pass
+                    self.close_connection = True
                 elif path == "/endless":
                     self.send_response(200)
                     self.send_header("Connection", "close")
@@ -158,6 +188,11 @@ class FileServer:
         self._threads = [
             threading.Thread(target=lambda s=server: s.serve_forever(poll_interval=POLL_INTERVAL_S), daemon=True) for server in (self._server, self._alt)
         ]
+
+    def gate(self, name: str) -> Gate:
+        """The gate of the ``/gated?id=<name>`` route, created on first use."""
+        with self._gates_lock:
+            return self._gates.setdefault(name, Gate())
 
     @property
     def port(self) -> int:

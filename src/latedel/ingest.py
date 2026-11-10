@@ -769,7 +769,10 @@ def check_hop(url: str, allowed_hosts: tuple[str, ...] | list[str], insecure_hos
     if not insecure and parts.port not in (None, HTTPS_PORT):
         raise _refuse(f"la dirección {where['url']} usa el puerto {parts.port}; solo se admite el puerto {HTTPS_PORT}.", host=host, port=parts.port, **where)
     if not host_allowed(host, allowed_hosts):
-        raise _refuse(f"el host {host!r} de {where['url']} no está en la lista de hosts permitidos {list(allowed_hosts)}.", host=host, **where)
+        raise _refuse(
+            f"el host {host!r} de {where['url']} no está en la lista de hosts permitidos {list(allowed_hosts)} ([source] allowed_hosts). "
+            "Si es el depósito al que Mendeley redirige y cambió, ver docs/runbook.md, R2 y R11.", host=host, **where,
+        )
     return host
 
 
@@ -788,8 +791,12 @@ def _expired(deadline: float | None) -> bool:
     return deadline is not None and time.perf_counter() >= deadline - DEADLINE_SLACK_S
 
 
-def _deadline_error(max_seconds: float, received: int | None = None) -> DownloadDeadlineError:
+def _deadline_error(max_seconds: float, received: int | None = None, *, host: str | None = None, hop: int | None = None) -> DownloadDeadlineError:
+    """The error of the overall deadline. `host` says which host was in progress and `hop` (1-based) which hop of the redirects was being waited for, if it was
+    one; with the bytes already received it is the host that sent them (R4-deadline-error-missing-hop-context)."""
     after = "" if received is None else f" tras recibir {received} bytes"
+    if host is not None:
+        after += f" de {host}" if hop is None else f" mientras se esperaba el salto {hop} ({host})"
     return DownloadDeadlineError(
         f"La descarga superó el tiempo máximo de {max_seconds:g} s (source.max_seconds){after}; se interrumpió y no se guardó nada. "
         "Si el origen es lento, se puede subir ese límite; si no responde, ver docs/runbook.md, R2."
@@ -810,7 +817,7 @@ def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str],
         if deadline is not None:
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
-                raise _deadline_error(max_seconds or 0.0)
+                raise _deadline_error(max_seconds or 0.0, host=host, hop=hop + 1)
             timeout = max(0.001, min(timeout, remaining))
         logger.info("download hop %d: %s (%s)", hop + 1, host, urllib.parse.urlsplit(current).scheme)
         request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT})
@@ -837,7 +844,7 @@ def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str],
             reason = getattr(error, "reason", error)
             timed_out = isinstance(error, TimeoutError) or isinstance(reason, TimeoutError)
             if deadline is not None and (time.perf_counter() >= deadline or (timed_out and _expired(deadline))):
-                raise _deadline_error(max_seconds or 0.0) from error
+                raise _deadline_error(max_seconds or 0.0, host=host, hop=hop + 1) from error
             if timed_out:
                 raise DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al conectar con {_shown(current)}.") from error
             raise DownloadError(f"No se pudo conectar con {_shown(current)}: {reason}.") from error
@@ -901,8 +908,10 @@ def download_file(
             staging.unlink(missing_ok=True)
 
     check_hop(url, allowed_hosts, insecure)  # before any connection: a refused address costs nothing
+    sending: str | None = None   # the host that is sending the body, once there is a response
     try:
         with _open(url, allowed_hosts, max_redirects, insecure, timeout_s, deadline, max_seconds) as response:
+            sending = url_host(response.geturl())
             length = response.headers.get("Content-Length", "")
             announced = int(length) if length.isascii() and length.isdigit() else None
             if announced is not None and announced > max_bytes:
@@ -916,7 +925,7 @@ def download_file(
                 while chunk := response.read1(chunk_bytes):
                     received += len(chunk)
                     if deadline is not None and time.perf_counter() >= deadline:
-                        raise _deadline_error(max_seconds or 0.0, received)
+                        raise _deadline_error(max_seconds or 0.0, received, host=sending)
                     if received > max_bytes:
                         raise _refuse(f"la respuesta supera el límite de {max_bytes} bytes.", received=received, max_bytes=max_bytes)
                     try:
@@ -945,7 +954,7 @@ def download_file(
     except (TimeoutError, http.client.HTTPException, OSError) as error:
         discard()
         if isinstance(error, TimeoutError) and _expired(deadline):
-            failure = _deadline_error(max_seconds or 0.0, received)
+            failure = _deadline_error(max_seconds or 0.0, received, host=sending)
         elif isinstance(error, TimeoutError):
             failure = DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al leer la respuesta.")
         else:

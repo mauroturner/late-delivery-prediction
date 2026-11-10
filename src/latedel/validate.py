@@ -46,7 +46,7 @@ from latedel.deliveries import (
 )
 from latedel.files import write_atomic
 from latedel.ingest import MONEY_TOLERANCE, SourceReport, _clean
-from latedel.schema import SCHEDULED_DAYS_BY_MODE, SourceError
+from latedel.schema import ORDER_LINES_SCHEMA, ORDERS_SCHEMA, OUTCOMES_SCHEMA, SCHEDULED_DAYS_BY_MODE, SourceError
 
 logger = logging.getLogger(__name__)
 
@@ -403,16 +403,26 @@ def _rule_v23(delivery: DeliveryFrames, conn: sqlite3.Connection) -> RuleResult:
     return make_result("V23", False, len(lines) + len(outcomes), len(set(lines["order_id"]) | set(outcomes["order_id"])), examples)
 
 
+_CONTRACT = {"orders": ORDERS_SCHEMA, "order_lines": ORDER_LINES_SCHEMA, "outcomes": OUTCOMES_SCHEMA}
+
+
 def _unreadable_files(folder: Path) -> list[str]:
+    """The files of a delivery that cannot be validated: missing, not Parquet, or Parquet that is not the table of the contract (other columns or other types).
+
+    The order of the columns does not matter. A file of the second kind reads without an error and would fail inside the rules, so it is named here (R3-001).
+    """
     bad = []
     for name in DELIVERY_FILES:
         path = Path(folder) / f"{name}.parquet"
         try:
             if not path.is_file():
                 raise OSError(name)
-            pq.ParquetFile(path)
+            schema = pq.ParquetFile(path).schema_arrow
         except (OSError, pa.ArrowException):
             bad.append(f"{name}.parquet")
+            continue
+        if {field.name: field.type for field in schema} != {field.name: field.type for field in _CONTRACT[name]}:
+            bad.append(f"{name}.parquet (no tiene las columnas ni los tipos del contrato)")
     return bad
 
 

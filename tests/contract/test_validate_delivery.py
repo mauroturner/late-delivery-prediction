@@ -409,3 +409,172 @@ def test_real_file_the_fifteen_deliveries_pass_in_order_and_add_up(cfg, real_rea
     again = validate_published_delivery(tmp_path, entry, plan[-1], conn, cfg, run_key="again")
     assert by_id(again)["V20"].examples[0]["reason"] == "already_loaded" and again.blocking_failed
     print("REAL", totals, "first delivery", date(2017, 1, 7))
+
+
+# --- H2: the advisories of the native review of U07 (R3-001, R3-002, R3-003) ------------------------------------------------------------------------------
+
+
+def rewrite_parquet(path: Path, change) -> None:
+    """Rewrite one published file with `change` applied to its table, as a tampered or foreign producer would."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path)
+    pq.write_table(change(table), path)
+
+
+def _drop(column: str):
+    return lambda table: table.drop_columns([column])
+
+
+def _rename(old: str, new: str):
+    return lambda table: table.rename_columns([new if name == old else name for name in table.column_names])
+
+
+def _retype(column: str):
+    import pyarrow as pa
+
+    return lambda table: table.set_column(table.column_names.index(column), column, table[column].cast(pa.string()))
+
+
+def _extra(table):
+    import pyarrow as pa
+
+    return table.append_column("extra", pa.array([0] * table.num_rows))
+
+
+# (file, change, why): a Parquet file that reads fine but is not the table of the contract
+SCHEMA_DAMAGE = {
+    "orders_without_order_id": ("orders", _drop("order_id")),
+    "orders_without_regime": ("orders", _drop("regime")),
+    "orders_without_the_date": ("orders", _drop("order_date")),
+    "lines_without_line_id": ("order_lines", _drop("line_id")),
+    "outcomes_without_is_cancelled": ("outcomes", _drop("is_cancelled")),
+    "outcomes_without_the_known_date": ("outcomes", _drop("outcome_known_date")),
+    "orders_with_a_renamed_column": ("orders", _rename("shipping_mode", "mode")),
+    "orders_with_an_extra_column": ("orders", _extra),
+    "outcomes_with_the_wrong_type": ("outcomes", _retype("real_days")),
+    "lines_with_the_wrong_type": ("order_lines", _retype("order_id")),
+}
+
+
+@pytest.mark.parametrize("damage", sorted(SCHEMA_DAMAGE))
+def test_a_published_file_with_other_columns_gives_the_v24_only_report_and_not_a_key_error(cfg, delivered, tmp_path, damage):
+    """R3-001: a file that is valid Parquet but not the table of the contract is a file that cannot be validated: V24 alone, as for garbage bytes."""
+    folder, plan, entries = delivered
+    copy = tmp_path / "deliveries"
+    shutil.copytree(folder, copy)
+    name, change = SCHEMA_DAMAGE[damage]
+    rewrite_parquet(copy / "M2017-01" / f"{name}.parquet", change)
+    conn = warehouse_through(delivered, 1)
+    report = validate_published_delivery(copy, entries[1], plan[1], conn, cfg, run_key="r")
+    assert [(r.rule_id, r.passed) for r in report.results] == [("V24", False)] and report.blocking_failed
+    example = report.results[0].examples[0]
+    assert example["reasons"] == ["unreadable_files"] and f"{name}.parquet" in example["message"]
+    assert set(report.not_evaluated) == (set(DELIVERY_BLOCKING) - {"V24"}) | set(INFORMATIVE) | set(MODEL_IDS)
+    other_files = [f"{n}.parquet" for n in ("orders", "order_lines", "outcomes") if n != name]
+    assert not any(other in example["message"] for other in other_files), "only the files that are not the table of the contract are named"
+
+
+def test_files_with_the_columns_of_the_contract_are_still_validated_like_before(cfg, delivered, tmp_path):
+    """The previous behavior of the command: columns in another order, or a rewrite with the same content, are still a delivery that can be validated."""
+    folder, plan, entries = delivered
+    copy = tmp_path / "deliveries"
+    shutil.copytree(folder, copy)
+    rewrite_parquet(copy / "M2017-01" / "orders.parquet", lambda table: table.select(list(reversed(table.column_names))))
+    conn = warehouse_through(delivered, 1)
+    report = validate_published_delivery(copy, entries[1], plan[1], conn, cfg, run_key="r")
+    assert [r.rule_id for r in report.results] == DELIVERY_BLOCKING + INFORMATIVE
+    assert by_id(report)["V24"].examples[0]["reasons"] == ["sha256_differs_from_manifest"], "different bytes, the same rows: only the fingerprint disagrees"
+
+
+# R3-002: the edges of the periods are inclusive; one day outside is outside
+
+
+@pytest.mark.parametrize("index", [0, 1, 7, 13, 14])
+def test_v21_a_date_exactly_on_the_first_or_the_last_day_of_its_period_is_inside_and_one_day_further_is_outside(cfg, delivered, index):
+    _folder, plan, _entries = delivered
+    spec = plan[index]
+    frames = frames_of(delivered, index)
+    conn = warehouse_through(delivered, index)
+    day = timedelta(days=1)
+
+    def v21(orders=None, outcomes=None):
+        changed = dataclasses.replace(frames, orders=frames.orders if orders is None else orders, outcomes=frames.outcomes if outcomes is None else outcomes)
+        return by_id(validate(cfg, delivered, index, conn, changed))["V21"]
+
+    def with_date(frame, column, value, row=0):
+        copy = frame.copy()
+        copy.iloc[row, copy.columns.get_loc(column)] = pd.Timestamp(value)
+        return copy
+
+    assert v21().passed, "the delivery as published is inside its periods"
+    for edge in (spec.outcomes_from, spec.outcomes_to):
+        assert v21(outcomes=with_date(frames.outcomes, "outcome_known_date", edge)).passed, f"an outcome known on {edge}, the edge of its period, is inside"
+    for outside in (spec.outcomes_from - day, spec.outcomes_to + day):
+        result = v21(outcomes=with_date(frames.outcomes, "outcome_known_date", outside))
+        assert not result.passed and result.examples[0]["table"] == "outcomes" and result.examples[0]["outcome_known_date"] == outside.isoformat()
+    if spec.orders_from is None:
+        assert not v21(orders=frames.orders.head(0).reindex(range(1)).assign(order_id=1, order_date=pd.Timestamp("2018-02-01"))).passed, "the close has no period of orders"
+        return
+    for edge in (spec.orders_from, spec.orders_to):
+        assert v21(orders=with_date(frames.orders, "order_date", edge)).passed, f"an order created on {edge}, the edge of its period, is inside"
+    for outside in (spec.orders_from - day, spec.orders_to + day):
+        result = v21(orders=with_date(frames.orders, "order_date", outside))
+        assert not result.passed and result.examples[0]["table"] == "orders" and result.examples[0]["order_date"] == outside.isoformat()
+
+
+# R3-003: each reason of V24 on its own
+
+
+def v24_reasons(report) -> list[str]:
+    return by_id(report)["V24"].examples[0]["reasons"]
+
+
+def test_v24_empty_alone(cfg, delivered, tmp_path):
+    from latedel.ingest import SourceFrames
+
+    _folder, plan, _entries = delivered
+    close = frames_of(delivered, 14)
+    nothing = SourceFrames(close.orders.iloc[0:0], close.order_lines.iloc[0:0], close.outcomes.iloc[0:0])
+    out = tmp_path / "deliveries"
+    entries = [publish(spec, nothing, out) for spec in plan]          # a source with nothing in it: every delivery is published empty
+    assert (entries[14].orders, entries[14].lines, entries[14].outcomes) == (0, 0, 0)
+    conn = warehouse_through(delivered, 14)
+    report = validate_published_delivery(out, entries[14], plan[14], conn, cfg, run_key="r")
+    assert v24_reasons(report) == ["empty"] and not by_id(report)["V24"].passed, "the files are the manifest's, so nothing else is wrong with them"
+
+
+def test_v24_rows_differ_from_the_manifest_alone(cfg, delivered):
+    folder, plan, entries = delivered
+    conn = warehouse_through(delivered, 1)
+    frames = frames_of(delivered, 1)
+    short = dataclasses.replace(frames, outcomes=frames.outcomes.iloc[1:])
+    report = validate(cfg, delivered, 1, conn, short)
+    assert v24_reasons(report) == ["rows_differ_from_manifest"] and by_id(report)["V24"].examples[0]["sha256"] == entries[1].sha256_json
+    # the manifest entry that lies about the rows of files that are exactly as published: the fingerprint agrees and the rows do not
+    lying = dataclasses.replace(entries[1], orders=entries[1].orders + 1)
+    report = validate_delivery(frames, plan[1], conn, cfg, entry=lying, folder=folder / "M2017-01", run_key="r")
+    assert v24_reasons(report) == ["rows_differ_from_manifest"]
+
+
+def test_v24_a_different_fingerprint_with_the_same_rows_alone(cfg, delivered, tmp_path):
+    folder, plan, entries = delivered
+    copy = tmp_path / "deliveries"
+    shutil.copytree(folder, copy)
+    rewrite_parquet(copy / "M2017-01" / "orders.parquet", lambda table: table.set_column(
+        table.column_names.index("payment_type"), "payment_type", table["payment_type"].take([len(table) - 1 - i for i in range(len(table))])))
+    conn = warehouse_through(delivered, 1)
+    report = validate_published_delivery(copy, entries[1], plan[1], conn, cfg, run_key="r")
+    assert v24_reasons(report) == ["sha256_differs_from_manifest"] and len(report.results) == len(DELIVERY_BLOCKING + INFORMATIVE)
+    example = by_id(report)["V24"].examples[0]
+    assert example["sha256"] != example["manifest_sha256"] and example["rows"] == example["manifest_rows"]
+
+
+def test_v24_unreadable_files_alone_when_the_frames_in_memory_are_the_published_ones(cfg, delivered, tmp_path):
+    folder, plan, entries = delivered
+    copy = tmp_path / "deliveries"
+    shutil.copytree(folder, copy)
+    (copy / "M2017-01" / "order_lines.parquet").write_bytes(b"not parquet")
+    conn = warehouse_through(delivered, 1)
+    report = validate_delivery(frames_of(delivered, 1), plan[1], conn, cfg, entry=entries[1], folder=copy / "M2017-01", run_key="r")
+    assert v24_reasons(report) == ["unreadable_files"] and "order_lines.parquet" in by_id(report)["V24"].examples[0]["message"]
