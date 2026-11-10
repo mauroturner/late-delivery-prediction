@@ -472,7 +472,7 @@ def test_fetch_downloads_checks_builds_and_the_second_run_changes_nothing(cfg, t
         assert first["downloaded"] is True and first["built"] is True and first["sha256"] == sha(fixture_bytes)
         assert first["lines"] == fixture_truth.n_lines and first["orders"] == fixture_truth.n_orders
         assert (tmp_path / "raw" / cfg.source.file_name).read_bytes() == fixture_bytes
-        assert sorted(p.name for p in (tmp_path / "interim").iterdir()) == ["order_lines.parquet", "orders.parquet", "outcomes.parquet"]
+        assert sorted(p.name for p in (tmp_path / "interim").iterdir()) == ["interim_manifest.json", "order_lines.parquet", "orders.parquet", "outcomes.parquet"]
         assert read_source_manifest(tmp_path / "raw" / MANIFEST_NAME).sha256 == sha(fixture_bytes)
         assert interim_fingerprint(tmp_path / "interim") == sha(fixture_bytes)
         before = snapshot(tmp_path)
@@ -606,5 +606,5 @@ def test_real_download_from_mendeley_follows_only_allowed_hosts_and_matches_the_
         )
     assert digest == cfg.source.accepted_sha256 and dest.stat().st_size == 95_910_149
     hops = [r.getMessage() for r in caplog.records if r.getMessage().startswith("download hop")]
-    assert len(hops) >= 2 and "data.mendeley.com" in hops[0] and ".amazonaws.com" in hops[-1]
+    assert len(hops) >= 2 and "data.mendeley.com" in hops[0] and "prod-dcd-datasets-public-files-eu-west-1.s3.eu-west-1.amazonaws.com" in hops[-1]
     print("HOPS:", [h.split(" ")[3] for h in hops])

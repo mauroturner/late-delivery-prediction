@@ -4,7 +4,9 @@
 [source]
 mode = "http"                        # "http" or "local"
 url = "https://data.mendeley.com/public-files/datasets/8gx2fvg2k6/files/72784be5-36d3-44fe-b75d-0edbf1999f65/file_downloaded"
-allowed_hosts = ["data.mendeley.com", ".amazonaws.com"]   # an exact host name, or a suffix when it starts with a dot (V02)
+# an exact host name, or a suffix when it starts with a dot (V02). Mendeley answers 302 to one signed link of one S3 bucket (observed on 2026-11-10);
+# that bucket is listed by name, because a suffix like ".amazonaws.com" admits the bucket of anybody (decision D48). The SHA-256 below pins the content.
+allowed_hosts = ["data.mendeley.com", "prod-dcd-datasets-public-files-eu-west-1.s3.eu-west-1.amazonaws.com"]
 max_redirects = 3
 local_path = ""                      # local mode: path of the CSV (relative to the project folder)
 accepted_sha256 = "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6"   # http mode (V01); empty in local mode
@@ -12,7 +14,8 @@ file_name = "DataCoSupplyChainDataset.csv"
 encoding = "cp1252"
 max_bytes = 134217728                # 128 MiB (V02)
 chunk_bytes = 1048576
-timeout_s = 120
+timeout_s = 120                      # connection and each read (V02)
+max_seconds = 900                    # the whole download, redirects included: a source that drips bytes cannot hold the task longer (decision D49)
 
 [deliveries]
 first_order_date = 2015-01-01

@@ -4,7 +4,8 @@ The CSV is untrusted input and holds personal data. ``read_source`` reads it lin
 
 - V03: the encoding is read strictly (cp1252), with no byte-order mark, no NUL byte and no line ending other than CRLF or LF;
 - V04: the header has the 53 columns, with their exact names and in their order;
-- V05: every row has 53 fields and every number and date converts (nothing is tolerated: a short row is a defect, not a missing value);
+- V05: every row has 53 fields and every number and date converts, and the day counts are not negative (nothing is tolerated: a short row is a defect, not a
+  missing value);
 - V06: the email and the password are masked in every row;
 - V07: ``Order Item Id`` is unique and each order has one value in each of the 20 columns that are constant inside an order;
 - V08: in the orders that are not cancelled, ``Late_delivery_risk`` is "real days above scheduled days";
@@ -32,6 +33,7 @@ import math
 import os
 import re
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -76,11 +78,14 @@ SOURCE_REPORT_KEY = b"latedel.source_report"
 
 _BOMS = (b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")
 _INT = re.compile(r"-?[0-9]{1,18}", re.ASCII)
+_NONNEGATIVE = re.compile(r"[0-9]{1,18}", re.ASCII)
 _DECIMAL = re.compile(r"-?[0-9]{1,30}(?:\.[0-9]{1,30})?(?:[eE][-+]?[0-9]{1,3})?", re.ASCII)
 _STAMP = re.compile(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{4}) ([0-9]{1,2}):([0-9]{2})", re.ASCII)
 
+# the day counts are whole numbers of days that cannot be below zero (V05); a minus sign is a defect of the file (H1, R3-negative-day-counts-not-rejected)
+NONNEGATIVE_COLUMNS = ("Days for shipping (real)", "Days for shipment (scheduled)")
 INT_COLUMNS = (
-    "Days for shipping (real)", "Days for shipment (scheduled)", "Late_delivery_risk", "Category Id", "Customer Id", "Department Id", "Order Customer Id",
+    "Late_delivery_risk", "Category Id", "Customer Id", "Department Id", "Order Customer Id",
     "Order Id", "Order Item Cardprod Id", "Order Item Id", "Order Item Quantity", "Product Card Id", "Product Category Id", "Product Status",
 )
 DECIMAL_COLUMNS = (
@@ -93,7 +98,8 @@ _COLUMN_INDEX = {name: i for i, name in enumerate(SOURCE_COLUMNS)}
 _ORDER_LEVEL_INDEX = tuple(_COLUMN_INDEX[name] for name in ORDER_LEVEL_COLUMNS)
 _ORDER_LEVEL_POSITION = {name: i for i, name in enumerate(ORDER_LEVEL_COLUMNS)}
 _CHECKS = tuple(
-    [(_COLUMN_INDEX[name], name, "int") for name in INT_COLUMNS]
+    [(_COLUMN_INDEX[name], name, "nonnegative") for name in NONNEGATIVE_COLUMNS]
+    + [(_COLUMN_INDEX[name], name, "int") for name in INT_COLUMNS]
     + [(_COLUMN_INDEX[name], name, "decimal") for name in DECIMAL_COLUMNS]
     + [(_COLUMN_INDEX[name], name, "date") for name in DATE_COLUMNS]
 )
@@ -244,6 +250,8 @@ def _v05_message(problems: _Problems) -> str:
         where = f"en la línea {first['line']}"
         if key[0] == "field_count":
             parts.append(f"{item['count']} fila(s) tienen {key[1]} campos y se esperaban {len(SOURCE_COLUMNS)} (por ejemplo, {where})")
+        elif key[0] == "negative":
+            parts.append(f"{item['count']} valor(es) negativo(s) en «{key[1]}», que cuenta días (por ejemplo, {_clean(first['value'])!r} {where})")
         elif key[0] == "column":
             if key[1] in _PERSONAL:
                 parts.append(f"{item['count']} valor(es) de «{key[1]}» no convierten ({where}; el valor de una columna personal no se muestra)")
@@ -327,7 +335,13 @@ def read_source(path: Path, cfg: PipelineConfig) -> tuple[SourceFrames, SourceRe
             clean = True
             for index, name, kind in _CHECKS:
                 value = row[index]
-                if kind == "int":
+                if kind == "nonnegative":
+                    ok = _NONNEGATIVE.fullmatch(value) is not None
+                    if not ok and _INT.fullmatch(value) is not None:     # a whole number with a minus sign
+                        clean = False
+                        v05.add(("negative", name), line, {"value": value}, kind="negative", column=name)
+                        continue
+                elif kind == "int":
                     ok = _INT.fullmatch(value) is not None
                 elif kind == "decimal":
                     ok = _valid_decimal(value)
@@ -559,11 +573,25 @@ def _report_json(report: SourceReport) -> bytes:
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+INTERIM_MANIFEST = "interim_manifest.json"
+INTERIM_MANIFEST_VERSION = 1
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+class InterimError(RuntimeError):
+    """The three interim files are not one consistent set: one is missing or changed, or the manifest that names them is missing or not theirs."""
+
+
 def write_interim(frames: SourceFrames, report: SourceReport, interim_dir: Path, source_sha256: str) -> list[Path]:
-    """Write ``orders.parquet``, ``order_lines.parquet`` and ``outcomes.parquet`` to `interim_dir`, each atomically, with the fingerprint of the source.
+    """Write ``orders.parquet``, ``order_lines.parquet`` and ``outcomes.parquet`` to `interim_dir`, each atomically, and then the manifest of their hashes.
 
     The three tables are built (and so checked against their Arrow schemas) before any file is touched: a table that does not convert leaves the folder as it
     was. There is no personal column in any of them, and the metadata holds only the fingerprint, the attribution and the report's counts.
+
+    Each rename is atomic but the four together are not, so the manifest (``interim_manifest.json``: the SHA-256 of each file and the fingerprint of the source)
+    is written last and every reader checks it: a failure between two renames leaves files that do not match the manifest, which is a set that is refused
+    (``interim_fingerprint`` is None, ``read_interim`` raises ``InterimError``) and rebuilt, never a mix of old and new tables that is read (decision D50).
+    Returns the paths of the three Parquet files.
     """
     interim_dir = Path(interim_dir)
     metadata = {FINGERPRINT_KEY: source_sha256.encode("ascii"), ATTRIBUTION_KEY: ATTRIBUTION.encode("utf-8"), SOURCE_REPORT_KEY: _report_json(report)}
@@ -578,12 +606,13 @@ def write_interim(frames: SourceFrames, report: SourceReport, interim_dir: Path,
         with atomic_path(target) as temporary:
             pq.write_table(tables[name], temporary)
         written.append(target)
+    manifest = {"version": INTERIM_MANIFEST_VERSION, "source_sha256": source_sha256, "files": {name: sha256_file(interim_dir / f"{name}.parquet") for name, _s in INTERIM_FILES}}
+    with atomic_path(interim_dir / INTERIM_MANIFEST) as temporary:
+        temporary.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return written
 
 
-
-
-# --- the interim files as a unit: fingerprint and report ---------------------------------------------------------------------
+# --- the interim files as a unit: manifest, fingerprint and report ----------------------------------------------------------
 
 
 def _metadata(path: Path) -> dict[bytes, bytes]:
@@ -593,19 +622,73 @@ def _metadata(path: Path) -> dict[bytes, bytes]:
         return {}
 
 
-def interim_fingerprint(interim_dir: Path) -> str | None:
-    """The SHA-256 of the CSV that the three streams were built from, or None if a stream is missing, has none or they disagree."""
-    found = set()
+def _interim_problem(interim_dir: Path) -> str | None:
+    """Why the files of `interim_dir` are not one set that the manifest names, or None if they are."""
+    folder = Path(interim_dir)
+    path = folder / INTERIM_MANIFEST
+    if not path.is_file():
+        return f"falta {INTERIM_MANIFEST} en {folder}: los archivos intermedios no son un conjunto completo"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        files = document["files"]
+        valid = (
+            isinstance(document, dict) and set(document) == {"version", "source_sha256", "files"} and document["version"] == INTERIM_MANIFEST_VERSION
+            and isinstance(document["source_sha256"], str) and _HEX64.fullmatch(document["source_sha256"]) is not None
+            and isinstance(files, dict) and set(files) == {name for name, _s in INTERIM_FILES}
+            and all(isinstance(v, str) and _HEX64.fullmatch(v) for v in files.values())
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        return f"{INTERIM_MANIFEST} no es un manifiesto válido de los archivos intermedios"
     for name, _schema in INTERIM_FILES:
-        value = _metadata(Path(interim_dir) / f"{name}.parquet").get(FINGERPRINT_KEY)
-        if value is None:
-            return None
-        found.add(value)
-    if len(found) != 1:
+        target = folder / f"{name}.parquet"
+        if not target.is_file():
+            return f"falta {target.name}, que el manifiesto nombra"
+        if sha256_file(target) != files[name]:
+            return f"{target.name} no coincide con la huella que dice el manifiesto: es de otra escritura"
+        if _metadata(target).get(FINGERPRINT_KEY) != document["source_sha256"].encode("ascii"):
+            return f"{target.name} no es de la fuente que dice el manifiesto"
+    return None
+
+
+def interim_state(interim_dir: Path) -> tuple[str, SourceReport] | None:
+    """``(fingerprint, report)`` of the interim set, read once, or None if it is not a consistent set with a report of the current layout.
+
+    None when the manifest or a file is missing or is not the one the manifest names, and when the stored report is missing or of an older layout
+    (decision D43): in every case the streams are rebuilt from the CSV.
+    """
+    if _interim_problem(interim_dir) is not None:
         return None
-    if load_source_report(interim_dir) is None:  # no report, or one of an older layout: the streams are rebuilt
+    report = load_source_report(interim_dir)
+    if report is None:
         return None
-    return found.pop().decode("ascii")
+    fingerprint = _metadata(Path(interim_dir) / "orders.parquet").get(FINGERPRINT_KEY)
+    return (fingerprint.decode("ascii"), report) if fingerprint is not None else None
+
+
+def interim_fingerprint(interim_dir: Path) -> str | None:
+    """The SHA-256 of the CSV that the three streams were built from, or None if they are not one consistent set (see ``interim_state``)."""
+    state = interim_state(interim_dir)
+    return None if state is None else state[0]
+
+
+def read_interim(interim_dir: Path) -> tuple[SourceFrames, SourceReport]:
+    """The three streams and the report of a consistent interim set; ``InterimError`` if the files are not the set that the manifest names."""
+    problem = _interim_problem(interim_dir)
+    if problem is not None:
+        raise InterimError(problem)
+    report = load_source_report(interim_dir)
+    if report is None:
+        raise InterimError(f"el reporte de la fuente guardado en {interim_dir} falta o es de un diseño anterior")
+    tables = {}
+    for name, _schema in INTERIM_FILES:
+        frame = pq.read_table(Path(interim_dir) / f"{name}.parquet").to_pandas()
+        for column in ("order_date", "outcome_known_date"):
+            if column in frame.columns:
+                frame[column] = frame[column].astype("datetime64[ns]")
+        tables[name] = frame
+    return SourceFrames(tables["orders"], tables["order_lines"], tables["outcomes"]), report
 
 
 def load_source_report(interim_dir: Path) -> SourceReport | None:
@@ -633,6 +716,11 @@ HTTPS_PORT = 443
 
 class DownloadError(RuntimeError):
     """The download did not end with the whole file (network, status, timeout, truncation). Not a rule: it can be retried."""
+
+
+class DownloadDeadlineError(DownloadError):
+    """The download did not finish within ``source.max_seconds``. Like any transport failure it can be retried; unlike a slow read it is not left to the
+    read timeout: a source that drips bytes never trips that one (decision D49)."""
 
 
 class _LocalFault(Exception):
@@ -692,16 +780,42 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str], timeout_s: int):
-    """Open `url` and follow its redirects by hand; every address is checked before it is requested. Returns the open response."""
+DEADLINE_SLACK_S = 0.05    # a socket timeout can fire a few milliseconds before the time it was given (Windows ticks every 15.6 ms): that is still the deadline
+
+
+def _expired(deadline: float | None) -> bool:
+    """Whether the overall deadline has passed, or is so close that a timeout that has just fired was cut by it and not by the read timeout."""
+    return deadline is not None and time.perf_counter() >= deadline - DEADLINE_SLACK_S
+
+
+def _deadline_error(max_seconds: float, received: int | None = None) -> DownloadDeadlineError:
+    after = "" if received is None else f" tras recibir {received} bytes"
+    return DownloadDeadlineError(
+        f"La descarga superó el tiempo máximo de {max_seconds:g} s (source.max_seconds){after}; se interrumpió y no se guardó nada. "
+        "Si el origen es lento, se puede subir ese límite; si no responde, ver docs/runbook.md, R2."
+    )
+
+
+def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str], timeout_s: int, deadline: float | None = None, max_seconds: float | None = None):
+    """Open `url` and follow its redirects by hand; every address is checked before it is requested. Returns the open response.
+
+    With a `deadline` (a ``time.perf_counter()`` value: on Windows with Python 3.11 ``time.monotonic()`` ticks every 15.6 ms) a hop that starts after it is not requested, and a hop that is cut by it, for the shorter time it was given,
+    is a ``DownloadDeadlineError`` and not a timeout of the read.
+    """
     opener = urllib.request.build_opener(_NoRedirect)
     current = url
     for hop in range(max_redirects + 1):
         host = check_hop(current, allowed_hosts, insecure, hop)
+        timeout = float(timeout_s)
+        if deadline is not None:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise _deadline_error(max_seconds or 0.0)
+            timeout = max(0.001, min(timeout, remaining))
         logger.info("download hop %d: %s (%s)", hop + 1, host, urllib.parse.urlsplit(current).scheme)
         request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT})
         try:
-            response = opener.open(request, timeout=timeout_s)
+            response = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             code = error.code
             location = error.headers.get("Location") if code in REDIRECT_CODES else None
@@ -721,7 +835,10 @@ def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str],
             raise DownloadError(f"{_shown(current)} respondió HTTP {code}.") from None
         except (TimeoutError, urllib.error.URLError, OSError) as error:
             reason = getattr(error, "reason", error)
-            if isinstance(error, TimeoutError) or isinstance(reason, TimeoutError):
+            timed_out = isinstance(error, TimeoutError) or isinstance(reason, TimeoutError)
+            if deadline is not None and (time.perf_counter() >= deadline or (timed_out and _expired(deadline))):
+                raise _deadline_error(max_seconds or 0.0) from error
+            if timed_out:
                 raise DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al conectar con {_shown(current)}.") from error
             raise DownloadError(f"No se pudo conectar con {_shown(current)}: {reason}.") from error
         if response.status != 200:
@@ -751,7 +868,7 @@ def _create_staging(dest: Path) -> tuple[int, Path]:
 
 def download_file(
     url: str, dest: Path, accepted_sha256: str, allowed_hosts: list[str] | tuple[str, ...], max_redirects: int, max_bytes: int, chunk_bytes: int,
-    timeout_s: int, *, insecure_hosts: frozenset[str] | set[str] = frozenset(),
+    timeout_s: int, *, max_seconds: float | None = None, insecure_hosts: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Path, str]:
     """Download `url` to a staging file of its own, hashing it on the fly; move it to `dest` only if the SHA-256 is `accepted_sha256`. Returns ``(dest, sha256)``.
 
@@ -760,8 +877,18 @@ def download_file(
     the first response has arrived: a refused address leaves no folder, no staging file and no part. A transport failure, a status other than 200 or a body
     shorter than announced is a ``DownloadError`` after logging it. A destination folder or staging file that cannot be created and a chunk that cannot be
     written (a full disk) are local faults: each raises its own ``OSError``, logged with its traceback, and the staging file is removed.
-    `insecure_hosts` lets a test use plain HTTP on named hosts (a local server); the pipeline never passes it.
+    `max_seconds` is the overall deadline of the whole call, redirects included (None: no deadline, as before); it is checked before every hop, bounds the time
+    that a hop may take and is checked after every piece that is read, so the longest the call can run past it is one piece of the read, and a piece that never
+    comes is cut by the read timeout. Passing it ends the call with a ``DownloadDeadlineError`` and the staging file removed (decision D49). Every end of the
+    call, whichever it is, is logged with the seconds it took. `insecure_hosts` lets a test use plain HTTP on named hosts (a local server); the pipeline never
+    passes it.
     """
+    started = time.perf_counter()
+    deadline = None if max_seconds is None else started + max_seconds
+
+    def took() -> float:
+        return time.perf_counter() - started
+
     dest = Path(dest)
     part = dest.with_name(dest.name + ".part")
     insecure = frozenset(host.lower() for host in insecure_hosts)
@@ -775,7 +902,7 @@ def download_file(
 
     check_hop(url, allowed_hosts, insecure)  # before any connection: a refused address costs nothing
     try:
-        with _open(url, allowed_hosts, max_redirects, insecure, timeout_s) as response:
+        with _open(url, allowed_hosts, max_redirects, insecure, timeout_s, deadline, max_seconds) as response:
             length = response.headers.get("Content-Length", "")
             announced = int(length) if length.isascii() and length.isdigit() else None
             if announced is not None and announced > max_bytes:
@@ -786,8 +913,10 @@ def download_file(
                 raise _LocalFault from local
             logger.info("download start: announced size %s to %s", announced, staging)
             with os.fdopen(descriptor, "wb") as handle:
-                while chunk := response.read(chunk_bytes):
+                while chunk := response.read1(chunk_bytes):
                     received += len(chunk)
+                    if deadline is not None and time.perf_counter() >= deadline:
+                        raise _deadline_error(max_seconds or 0.0, received)
                     if received > max_bytes:
                         raise _refuse(f"la respuesta supera el límite de {max_bytes} bytes.", received=received, max_bytes=max_bytes)
                     try:
@@ -801,25 +930,27 @@ def download_file(
         cause = fault.__cause__
         discard()
         if staging is None:
-            logger.warning("download could not start (local fault): %s", cause, exc_info=cause)
+            logger.warning("download could not start (local fault) after %.1f s: %s", took(), cause, exc_info=cause)
         else:
-            logger.warning("download stopped by a local fault after %d bytes: %s", received, cause, exc_info=cause)
+            logger.warning("download stopped by a local fault after %d bytes and %.1f s: %s", received, took(), cause, exc_info=cause)
         raise cause from None
     except SourceError as error:
         discard()
-        logger.warning("download refused: %s", error)
+        logger.warning("download refused after %.1f s: %s", took(), error)
         raise
     except DownloadError as error:
         discard()
-        logger.warning("download failed: %s", error)
+        logger.warning("download failed after %.1f s: %s", took(), error)
         raise
     except (TimeoutError, http.client.HTTPException, OSError) as error:
         discard()
-        if isinstance(error, TimeoutError):
+        if isinstance(error, TimeoutError) and _expired(deadline):
+            failure = _deadline_error(max_seconds or 0.0, received)
+        elif isinstance(error, TimeoutError):
             failure = DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al leer la respuesta.")
         else:
             failure = DownloadError(f"La conexión se cortó tras {received} bytes: {error}.")
-        logger.warning("download failed: %s", failure)
+        logger.warning("download failed after %.1f s: %s", took(), failure)
         raise failure from error
     except BaseException:
         discard()
@@ -828,7 +959,7 @@ def download_file(
     actual = digest.hexdigest()
     if actual != accepted_sha256:
         os.replace(staging, part)
-        logger.error("download hash mismatch: got %s, accepted %s; kept %s", actual, accepted_sha256, part)
+        logger.error("download hash mismatch after %.1f s: got %s, accepted %s; kept %s", took(), actual, accepted_sha256, part)
         raise SourceError(
             "V01",
             f"la huella SHA-256 del CSV descargado es {actual} y la aceptada es {accepted_sha256}; se conservó {part} para inspeccionarlo y no se reemplazó {dest}.",
@@ -839,7 +970,7 @@ def download_file(
         part.unlink(missing_ok=True)  # the accepted file supersedes what an earlier failure kept for inspection
     except OSError as error:  # the download is finished and verified: a stale part that cannot be cleared must not turn it into a failure
         logger.warning("download accepted but the earlier %s could not be removed: %s", part, error)
-    logger.info("download end: %s, %d bytes, sha256 %s", dest, received, actual)
+    logger.info("download end: %s, %d bytes, sha256 %s, in %.1f s", dest, received, actual, took())
     return dest, actual
 
 
@@ -905,8 +1036,11 @@ def fetch_source(ctx: _HasConfig, *, insecure_hosts: frozenset[str] | set[str] =
     """
     cfg = ctx.cfg
     source, raw_dir, interim_dir = cfg.source, cfg.paths.raw_dir, cfg.paths.interim_dir
+    if source.mode not in ("http", "local"):   # a configuration built without load_config skips its check: an unknown mode is not silently local
+        raise ValueError(f"[source] mode: se esperaba 'http' o 'local', se recibió {source.mode!r}")
     manifest_path = raw_dir / MANIFEST_NAME
     downloaded = False
+    download_seconds = 0.0
 
     if source.mode == "http":
         csv_path = raw_dir / source.file_name
@@ -915,10 +1049,12 @@ def fetch_source(ctx: _HasConfig, *, insecure_hosts: frozenset[str] | set[str] =
             if digest != source.accepted_sha256:
                 raise _rejected(csv_path, "aceptada", digest, source.accepted_sha256)
         else:
+            started = time.perf_counter()
             _, digest = download_file(
                 source.url, csv_path, source.accepted_sha256, source.allowed_hosts, source.max_redirects, source.max_bytes, source.chunk_bytes,
-                source.timeout_s, insecure_hosts=insecure_hosts,
+                source.timeout_s, max_seconds=source.max_seconds, insecure_hosts=insecure_hosts,
             )
+            download_seconds = round(time.perf_counter() - started, 3)
             downloaded = True
         location = source.url
     else:
@@ -938,10 +1074,11 @@ def fetch_source(ctx: _HasConfig, *, insecure_hosts: frozenset[str] | set[str] =
         mode=source.mode, source=location, sha256=digest, size=size, fetched_at=datetime.now(UTC).isoformat(timespec="seconds"),
         csv_path=csv_path.name if source.mode == "http" else str(csv_path),
     )
-    result: dict[str, Any] = {"csv_path": str(csv_path), "sha256": digest, "size": size, "downloaded": downloaded}
+    result: dict[str, Any] = {"csv_path": str(csv_path), "sha256": digest, "size": size, "downloaded": downloaded, "download_seconds": download_seconds}
 
-    if interim_fingerprint(interim_dir) == digest:
-        report = load_source_report(interim_dir)
+    state = interim_state(interim_dir)     # one read: the fingerprint and the report come from the same files (decision D50)
+    if state is not None and state[0] == digest:
+        report = state[1]
         current = read_source_manifest(manifest_path)
         if current is None or current.sha256 != digest:
             write_source_manifest(manifest_path, manifest)

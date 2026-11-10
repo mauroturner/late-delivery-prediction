@@ -47,7 +47,7 @@ def refused(tmp_path: Path, match: str, snippet: str = "", replace: tuple[str, s
 
 def test_default_configuration_has_the_values_of_the_plan(cfg):
     assert cfg.source.mode == "http" and cfg.source.accepted_sha256 == HASH
-    assert cfg.source.allowed_hosts == ("data.mendeley.com", ".amazonaws.com") and cfg.source.max_redirects == 3
+    assert cfg.source.allowed_hosts == ("data.mendeley.com", "prod-dcd-datasets-public-files-eu-west-1.s3.eu-west-1.amazonaws.com") and cfg.source.max_redirects == 3
     assert cfg.source.max_bytes == 128 * 1024 * 1024 and cfg.source.encoding == "cp1252" and cfg.source.local_path is None
     assert cfg.deliveries.launch_date == date(2017, 1, 7) and cfg.deliveries.close_date == date(2018, 2, 7)
     assert (cfg.split.train_end, cfg.split.valid_start, cfg.split.test_start, cfg.split.post_break_start) == (

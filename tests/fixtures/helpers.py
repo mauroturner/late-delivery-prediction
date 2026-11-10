@@ -25,10 +25,12 @@ def minimal_warehouse(path: Path | str = ":memory:") -> sqlite3.Connection:
 
 def mark_loaded(conn: sqlite3.Connection, spec, frames, status: str = "loaded") -> None:
     """Record `spec` and the ids of its `frames` (a ``DeliveryFrames``) as loaded in a minimal warehouse."""
+    conn.execute("BEGIN")    # one transaction: on a file, one commit per row would take seconds
     conn.execute("INSERT INTO deliveries VALUES (?, ?, ?, ?)", (spec.delivery_id, spec.outcomes_from.isoformat(), spec.outcomes_to.isoformat(), status))
     conn.executemany("INSERT INTO raw_orders VALUES (?)", [(int(i),) for i in frames.orders["order_id"]])
     conn.executemany("INSERT INTO raw_order_lines VALUES (?, ?)", [(int(a), int(b)) for a, b in zip(frames.order_lines["line_id"], frames.order_lines["order_id"], strict=True)])
     conn.executemany("INSERT INTO raw_outcomes VALUES (?)", [(int(i),) for i in frames.outcomes["order_id"]])
+    conn.execute("COMMIT")
 
 
 def file_digest(path: Path) -> str:

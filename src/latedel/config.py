@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import codecs
 import dataclasses
+import math
 import os
 import re
 import tomllib
@@ -34,6 +35,10 @@ ENV_HOME = "LATEDEL_HOME"
 FEATURE_SET_NAMES = ("f0", "f1", "f2")
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# a folder name that is the same on every system: it starts with a letter, a digit, "_" or "-" (so "." and ".." are not names, and nothing is hidden),
+# has dots only between other characters, and does not end in a dot (Windows drops it, so "v1." and "v1" would be one folder)
+_FOLDER_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")
+MAX_SEED = 2**32 - 1   # the largest seed that numpy's legacy generators and scikit-learn accept
 _HOST_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
 _TYPE_NAMES = {
     bool: "verdadero o falso", int: "un entero", float: "un número", str: "un texto", date: "una fecha (AAAA-MM-DD)", Path: "una ruta",
@@ -53,6 +58,7 @@ class SourceConfig:
     max_bytes: int
     chunk_bytes: int
     timeout_s: int
+    max_seconds: float
 
 
 @dataclass(frozen=True)
@@ -278,6 +284,11 @@ def _positive(value: float, where: str) -> None:
         raise ValueError(f"{where}: se esperaba un valor mayor que 0, se recibió {value!r}")
 
 
+def _seed(value: int, where: str) -> None:
+    if not 0 <= value <= MAX_SEED:
+        raise ValueError(f"{where}: se esperaba un entero de 0 a {MAX_SEED}, se recibió {value!r}")
+
+
 def _fraction(value: float, where: str, *, closed_high: bool = False) -> None:
     if not (0 < value <= 1 if closed_high else 0 < value < 1):
         interval = "(0, 1]" if closed_high else "(0, 1)"
@@ -337,6 +348,8 @@ def _check_source(source: SourceConfig) -> None:
     _positive(source.max_bytes, "[source] max_bytes")
     _positive(source.chunk_bytes, "[source] chunk_bytes")
     _positive(source.timeout_s, "[source] timeout_s")
+    if not math.isfinite(source.max_seconds) or source.max_seconds <= 0:
+        raise ValueError(f"[source] max_seconds: se esperaba un número de segundos mayor que 0 y finito (el tiempo máximo de toda la descarga), se recibió {source.max_seconds!r}")
 
 
 def _check_dates(cfg: PipelineConfig) -> None:
@@ -401,10 +414,14 @@ def _check(cfg: PipelineConfig) -> None:
     if m.l2_regularization < 0:
         raise ValueError(f"[model] l2_regularization: se esperaba 0 o más, se recibió {m.l2_regularization!r}")
     _positive(m.max_iter, "[model] max_iter")
+    _seed(m.random_state, "[model] random_state")
     if m.calibration != "isotonic":
         raise ValueError(f"[model] calibration: el único método implementado es 'isotonic' (D13), se recibió {m.calibration!r}")
-    if not m.model_version.strip() or not re.fullmatch(r"[A-Za-z0-9_.-]+", m.model_version):
-        raise ValueError(f"[model] model_version: se esperaba un nombre sin espacios ni separadores de ruta, se recibió {m.model_version!r}")
+    if not _FOLDER_NAME.fullmatch(m.model_version) or m.model_version.endswith("."):
+        raise ValueError(
+            f"[model] model_version: se esperaba un nombre de carpeta simple (letras, números, «_», «-» y puntos entre otros caracteres; sin espacios, separadores "
+            f"de ruta ni punto al empezar o al terminar, y distinto de «.» y «..»), se recibió {m.model_version!r}"
+        )
 
     c = cfg.costs
     for key in ("alert_cost", "late_cost"):
@@ -421,6 +438,7 @@ def _check(cfg: PipelineConfig) -> None:
 
     e = cfg.evaluation
     _positive(e.bootstrap_resamples, "[evaluation] bootstrap_resamples")
+    _seed(e.bootstrap_seed, "[evaluation] bootstrap_seed")
     if e.calibration_bins < 2:
         raise ValueError(f"[evaluation] calibration_bins: se esperaba 2 o más, se recibió {e.calibration_bins!r}")
     if e.roc_points < 2:

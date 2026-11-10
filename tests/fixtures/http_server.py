@@ -15,7 +15,9 @@ Routes (every request is recorded in ``requests`` as ``(method, path, headers)``
 - ``/redirect?to=<location>&code=<302>``: a redirect to any ``Location``, absolute or relative;
 - ``/chain/<n>``: ``n`` redirects (each to ``/chain/<n-1>``, relative) and then the body;
 - ``/loop``: redirects to itself; ``/no-location``: a 302 without ``Location``;
-- ``/huge``: announces a ``Content-Length`` of a terabyte and sends nothing; ``/endless``: no ``Content-Length`` and a body that never ends.
+- ``/huge``: announces a ``Content-Length`` of a terabyte and sends nothing; ``/endless``: no ``Content-Length`` and a body that never ends;
+- ``/drip?step=<bytes>&pause=<seconds>``: the whole body with its ``Content-Length``, ``step`` bytes at a time with ``pause`` seconds between them: a source
+  that is slow but never silent for long, which only an overall deadline stops.
 """
 
 from __future__ import annotations
@@ -114,6 +116,19 @@ class FileServer:
                     self.send_response(200)
                     self.send_header("Content-Length", str(10**12))
                     self.end_headers()
+                    self.close_connection = True
+                elif path == "/drip":
+                    step, pause = int(query.get("step", ["100"])[0]), float(query.get("pause", ["0.05"])[0])
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(outer.body)))
+                    self.end_headers()
+                    try:
+                        for start in range(0, len(outer.body), step):
+                            self.wfile.write(outer.body[start:start + step])
+                            self.wfile.flush()
+                            time.sleep(pause)
+                    except OSError:
+                        pass
                     self.close_connection = True
                 elif path == "/endless":
                     self.send_response(200)

@@ -188,7 +188,7 @@ def test_personal_columns_never_reach_interim_files(cfg, fixture_read, fixture_t
     interim = tmp_path / "data" / "interim"
     written = write_interim(frames, report, interim, SHA)
     assert sorted(p.name for p in written) == ["order_lines.parquet", "orders.parquet", "outcomes.parquet"]
-    assert sorted(p.name for p in interim.iterdir()) == ["order_lines.parquet", "orders.parquet", "outcomes.parquet"], "no temporary file is left"
+    assert sorted(p.name for p in interim.iterdir()) == ["interim_manifest.json", "order_lines.parquet", "orders.parquet", "outcomes.parquet"], "no temporary file is left"
 
     blobs = {p.name: p.read_bytes() for p in interim.iterdir()}
     for name, blob in blobs.items():

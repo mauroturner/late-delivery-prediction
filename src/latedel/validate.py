@@ -77,7 +77,7 @@ RULES: dict[str, Rule] = {
     "V02": Rule("Descarga segura y tamaño: HTTPS en cada salto, host permitido, redirecciones y bytes dentro del límite", Severity.BLOCKING, "source"),
     "V03": Rule("Codificación cp1252 estricta, sin bytes nulos ni marca de orden de bytes, con saltos CRLF o LF", Severity.BLOCKING, "source"),
     "V04": Rule("El encabezado tiene las 53 columnas exactas, en orden", Severity.BLOCKING, "source"),
-    "V05": Rule("Cada fila tiene 53 campos y las fechas, los enteros y los decimales convierten", Severity.BLOCKING, "source"),
+    "V05": Rule("Cada fila tiene 53 campos, las fechas, los enteros y los decimales convierten y los días no son negativos", Severity.BLOCKING, "source"),
     "V06": Rule("El correo y la contraseña del cliente están enmascarados en todas las filas", Severity.BLOCKING, "source"),
     "V07": Rule("Cada línea tiene su identificador y cada pedido un solo valor en sus columnas constantes", Severity.BLOCKING, "source"),
     "V08": Rule("En los pedidos no cancelados, la etiqueta es «días reales mayores que los programados»", Severity.BLOCKING, "source"),
