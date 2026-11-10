@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -34,3 +35,63 @@ def cfg():
     from latedel.config import load_config
 
     return load_config(PROJECT_ROOT / "config" / "pipeline.toml")
+
+
+# --- the synthetic fixture and its malformed variants ----------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def fixture_truth(tmp_path_factory: pytest.TempPathFactory):
+    """The valid synthetic CSV (3000 orders, seed 0) and what it contains."""
+    from tests.fixtures.make_fixture import make_fixture
+
+    return make_fixture(tmp_path_factory.mktemp("fixture") / "dataco_fixture.csv", n_orders=3000, seed=0)
+
+
+@pytest.fixture(scope="session")
+def fixture_csv(fixture_truth) -> Path:
+    return fixture_truth.path
+
+
+@pytest.fixture(scope="session")
+def malformed_bytes(fixture_csv: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], bytes]:
+    """Factory: malformed_bytes(kind) -> the bytes of the valid fixture damaged in the given way, built once per session and kind."""
+    from tests.fixtures.make_fixture import make_malformed
+
+    cache: dict[str, bytes] = {}
+    folder = tmp_path_factory.mktemp("malformed")
+
+    def build(kind: str) -> bytes:
+        if kind not in cache:
+            cache[kind] = make_malformed(fixture_csv, kind, folder / f"{kind}.csv").read_bytes()
+        return cache[kind]
+
+    return build
+
+
+@pytest.fixture()
+def malformed(malformed_bytes: Callable[[str], bytes], tmp_path: Path) -> Callable[[str], Path]:
+    """Factory: malformed(kind) -> path of a copy, in this test's folder, of the valid fixture damaged in the given way."""
+
+    def build(kind: str) -> Path:
+        target = tmp_path / f"{kind}.csv"
+        target.write_bytes(malformed_bytes(kind))
+        return target
+
+    return build
+
+
+@pytest.fixture(scope="session")
+def fixture_read(cfg, fixture_csv):
+    """``(SourceFrames, SourceReport)`` of the valid fixture, read once. Frames are shared: tests that change them copy first."""
+    from latedel.ingest import read_source
+
+    return read_source(fixture_csv, cfg)
+
+
+@pytest.fixture(scope="session")
+def real_read(cfg):
+    """``(SourceFrames, SourceReport)`` of the real CSV, read once per session (needs data/raw/DataCoSupplyChainDataset.csv)."""
+    from latedel.ingest import read_source
+
+    return read_source(REAL_CSV, cfg)
