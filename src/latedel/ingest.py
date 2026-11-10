@@ -14,27 +14,39 @@ The first rule that fails, in that order, is raised as a ``SourceError`` that li
 (decision D39), and reading never writes anything. The 15 personal columns exist only inside the loop that reads a row: what leaves it is the orders,
 the lines and the outcomes (``SourceFrames``), built from the allowed columns, and a ``SourceReport`` with the counts that the later rules (V10 to V18)
 and the reports quote. ``write_interim`` writes the three streams as Parquet, atomically, with the fingerprint of the source.
+
+``download_file`` and ``fetch_source`` come after the reader. The download follows redirects itself, one hop at a time, and checks every address
+(the first one and each ``Location``) before connecting to it: HTTPS, a host of ``source.allowed_hosts``, the default port, at most
+``source.max_redirects`` redirects and at most ``source.max_bytes`` bytes (V02). The bytes go to a staging file of their own while the SHA-256 is computed, and
+reach their name only if the hash is the pinned one (V01). ``fetch_source`` is the first task of the pipeline and runs all of it, once per fingerprint.
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
+import http.client
 import json
 import logging
 import math
+import os
 import re
-from dataclasses import asdict, dataclass
-from datetime import date, datetime
+import secrets
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import asdict, dataclass, fields
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from latedel.config import PipelineConfig
-from latedel.files import atomic_path
+from latedel.config import PipelineConfig, host_allowed, url_host
+from latedel.files import atomic_path, sha256_file, write_atomic
 from latedel.schema import (
     ATTRIBUTION,
     CANCELLED_STATUS,
@@ -549,3 +561,373 @@ def write_interim(frames: SourceFrames, report: SourceReport, interim_dir: Path,
         written.append(target)
     return written
 
+
+
+
+# --- the interim files as a unit: fingerprint and report ---------------------------------------------------------------------
+
+
+def _metadata(path: Path) -> dict[bytes, bytes]:
+    try:
+        return pq.read_schema(Path(path)).metadata or {}
+    except (OSError, pa.ArrowException):
+        return {}
+
+
+def interim_fingerprint(interim_dir: Path) -> str | None:
+    """The SHA-256 of the CSV that the three streams were built from, or None if a stream is missing, has none or they disagree."""
+    found = set()
+    for name, _schema in INTERIM_FILES:
+        value = _metadata(Path(interim_dir) / f"{name}.parquet").get(FINGERPRINT_KEY)
+        if value is None:
+            return None
+        found.add(value)
+    if len(found) != 1:
+        return None
+    if _metadata(Path(interim_dir) / "orders.parquet").get(SOURCE_REPORT_KEY) is None:
+        return None
+    return found.pop().decode("ascii")
+
+
+def load_source_report(interim_dir: Path) -> SourceReport | None:
+    """The ``SourceReport`` stored with the streams, or None if there is none."""
+    raw = _metadata(Path(interim_dir) / "orders.parquet").get(SOURCE_REPORT_KEY)
+    if raw is None:
+        return None
+    document = json.loads(raw)
+    document["first_order_date"] = date.fromisoformat(document["first_order_date"])
+    document["last_order_date"] = date.fromisoformat(document["last_order_date"])
+    return SourceReport(**document)
+
+
+# --- the download (V01, V02) ---------------------------------------------------------------------------------------------------
+
+USER_AGENT = "latedel-pipeline/0.1"
+MANIFEST_NAME = "source_manifest.json"
+MANIFEST_VERSION = 1
+STAGING_ATTEMPTS = 100            # a clash of random 64-bit names is not expected; the loop is for the day it happens
+REDIRECT_CODES = (301, 302, 303, 307, 308)
+HTTPS_PORT = 443
+
+
+class DownloadError(RuntimeError):
+    """The download did not end with the whole file (network, status, timeout, truncation). Not a rule: it can be retried."""
+
+
+class _LocalFault(Exception):
+    """Carries an ``OSError`` that happened on this machine making or writing the staging file, so that it is not mistaken for a transport failure."""
+
+
+def _refuse(message: str, **details: Any) -> SourceError:
+    return SourceError("V02", message, [{"rule_id": "V02", **details}])
+
+
+def _shown(url: str) -> str:
+    """An address without its query: signed links carry their signature there, and a signature does not belong in a message or a log."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "<dirección ilegible>"
+    text = f"{parts.scheme}://{parts.hostname or ''}{parts.path}"
+    text = text[:120] + "..." if len(text) > 120 else text
+    return text + ("?..." if parts.query else "")
+
+
+def check_hop(url: str, allowed_hosts: tuple[str, ...] | list[str], insecure_hosts: frozenset[str] = frozenset(), hop: int = 0) -> str:
+    """Check an address before connecting to it and return its host; refuse it (V02) otherwise.
+
+    An address is accepted when it is plain (no user information, spaces, control characters or backslashes), its scheme is ``https`` on the default port
+    (``http`` and any port only for a host in `insecure_hosts`, which only a test passes) and its host is one of `allowed_hosts`. The first address and
+    every ``Location`` of a redirect go through here, so a redirect cannot lead anywhere that the first address could not.
+    """
+    text = url if isinstance(url, str) else ""
+    where = {"hop": hop, "url": _shown(text) if text else ""}
+    if not text or any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\\" for ch in text):
+        raise _refuse(f"la dirección {where['url']!r} no es una dirección que se pueda seguir (vacía, con espacios, caracteres de control o barras invertidas).", **where)
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        raise _refuse(f"la dirección {where['url']!r} no es una dirección que se pueda seguir.", **where) from None
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise _refuse(f"el esquema {scheme!r} de {where['url']} no se admite: solo https.", scheme=scheme, **where)
+    host = url_host(text)
+    if host is None:
+        raise _refuse(f"la dirección {where['url']!r} no es una dirección que se pueda seguir (usuario en la dirección, sin host o con un puerto ilegible).", **where)
+    insecure = host in insecure_hosts
+    if scheme == "http" and not insecure:
+        raise _refuse(f"la dirección {where['url']} no es HTTPS: cada salto de la descarga debe serlo.", host=host, scheme=scheme, **where)
+    if not insecure and parts.port not in (None, HTTPS_PORT):
+        raise _refuse(f"la dirección {where['url']} usa el puerto {parts.port}; solo se admite el puerto {HTTPS_PORT}.", host=host, port=parts.port, **where)
+    if not host_allowed(host, allowed_hosts):
+        raise _refuse(f"el host {host!r} de {where['url']} no está en la lista de hosts permitidos {list(allowed_hosts)}.", host=host, **where)
+    return host
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect inside urllib: the download does it, one checked hop at a time."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # urllib's signature
+        return None
+
+
+def _open(url: str, allowed_hosts, max_redirects: int, insecure: frozenset[str], timeout_s: int):
+    """Open `url` and follow its redirects by hand; every address is checked before it is requested. Returns the open response."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    current = url
+    for hop in range(max_redirects + 1):
+        host = check_hop(current, allowed_hosts, insecure, hop)
+        logger.info("download hop %d: %s (%s)", hop + 1, host, urllib.parse.urlsplit(current).scheme)
+        request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT})
+        try:
+            response = opener.open(request, timeout=timeout_s)
+        except urllib.error.HTTPError as error:
+            code = error.code
+            location = error.headers.get("Location") if code in REDIRECT_CODES else None
+            error.close()
+            if code in REDIRECT_CODES:
+                if not location:
+                    raise _refuse(f"{_shown(current)} respondió HTTP {code} sin cabecera Location.", hop=hop + 1) from None
+                if hop == max_redirects:
+                    raise _refuse(f"la descarga pide más de {max_redirects} redirecciones (la {hop + 1} sale de {_shown(current)}); no se sigue.",
+                                  hop=hop + 1, max_redirects=max_redirects) from None
+                current = urllib.parse.urljoin(current, location)
+                continue
+            if code == 404:
+                raise DownloadError(
+                    f"No se encontró la fuente en {_shown(current)} (HTTP 404). El archivo pudo haberse movido o renombrado: ver docs/runbook.md, R11."
+                ) from None
+            raise DownloadError(f"{_shown(current)} respondió HTTP {code}.") from None
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
+            reason = getattr(error, "reason", error)
+            if isinstance(error, TimeoutError) or isinstance(reason, TimeoutError):
+                raise DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al conectar con {_shown(current)}.") from error
+            raise DownloadError(f"No se pudo conectar con {_shown(current)}: {reason}.") from error
+        if response.status != 200:
+            response.close()
+            raise DownloadError(f"{_shown(current)} respondió HTTP {response.status} y se esperaba 200.")
+        return response
+    raise AssertionError("unreachable: the last hop either returns or raises")  # pragma: no cover
+
+
+def _create_staging(dest: Path) -> tuple[int, Path]:
+    """Create the folder of `dest` and an empty staging file in it, exclusively and under a random name; return ``(descriptor, path)``.
+
+    The file is created as ``open(path, "wb")`` would create it, asking for mode 0666 and leaving the umask to decide (``mkstemp`` would give 0600 and
+    ``os.replace`` would carry that mode into `dest`). ``O_EXCL`` means an existing file is never reused and ``O_NOFOLLOW`` that a link planted under the chosen
+    name is not followed.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(STAGING_ATTEMPTS):
+        path = dest.with_name(f"{dest.name}.{secrets.token_hex(8)}.staging")
+        try:
+            return os.open(path, flags, 0o666), path
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"No se pudo crear un archivo de preparación junto a {dest} tras {STAGING_ATTEMPTS} intentos")
+
+
+def download_file(
+    url: str, dest: Path, accepted_sha256: str, allowed_hosts: list[str] | tuple[str, ...], max_redirects: int, max_bytes: int, chunk_bytes: int,
+    timeout_s: int, *, insecure_hosts: frozenset[str] | set[str] = frozenset(),
+) -> tuple[Path, str]:
+    """Download `url` to a staging file of its own, hashing it on the fly; move it to `dest` only if the SHA-256 is `accepted_sha256`. Returns ``(dest, sha256)``.
+
+    Every address is checked before it is requested (V02, ``check_hop``), the length announced and the bytes received are held to `max_bytes` (V02) and a
+    different hash (V01) keeps the whole download as ``<dest>.part`` (replacing an earlier one) and leaves `dest` exactly as it was. Nothing is created until
+    the first response has arrived: a refused address leaves no folder, no staging file and no part. A transport failure, a status other than 200 or a body
+    shorter than announced is a ``DownloadError`` after logging it. A destination folder or staging file that cannot be created and a chunk that cannot be
+    written (a full disk) are local faults: each raises its own ``OSError``, logged with its traceback, and the staging file is removed.
+    `insecure_hosts` lets a test use plain HTTP on named hosts (a local server); the pipeline never passes it.
+    """
+    dest = Path(dest)
+    part = dest.with_name(dest.name + ".part")
+    insecure = frozenset(host.lower() for host in insecure_hosts)
+    digest = hashlib.sha256()
+    received = 0
+    staging: Path | None = None
+
+    def discard() -> None:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+
+    check_hop(url, allowed_hosts, insecure)  # before any connection: a refused address costs nothing
+    try:
+        with _open(url, allowed_hosts, max_redirects, insecure, timeout_s) as response:
+            length = response.headers.get("Content-Length", "")
+            announced = int(length) if length.isascii() and length.isdigit() else None
+            if announced is not None and announced > max_bytes:
+                raise _refuse(f"la descarga anuncia {announced} bytes, por encima del límite de {max_bytes}.", announced=announced, max_bytes=max_bytes)
+            try:
+                descriptor, staging = _create_staging(dest)
+            except OSError as local:  # the folder or the file could not be made on this machine: not a cut connection, and the cause is the error itself
+                raise _LocalFault from local
+            logger.info("download start: announced size %s to %s", announced, staging)
+            with os.fdopen(descriptor, "wb") as handle:
+                while chunk := response.read(chunk_bytes):
+                    received += len(chunk)
+                    if received > max_bytes:
+                        raise _refuse(f"la respuesta supera el límite de {max_bytes} bytes.", received=received, max_bytes=max_bytes)
+                    try:
+                        handle.write(chunk)
+                    except OSError as local:  # a full disk is not a cut connection, and retrying the download would not help
+                        raise _LocalFault from local
+                    digest.update(chunk)
+        if announced is not None and received != announced:
+            raise DownloadError(f"Se recibieron {received} bytes pero se anunciaron {announced}.")
+    except _LocalFault as fault:
+        cause = fault.__cause__
+        discard()
+        if staging is None:
+            logger.warning("download could not start (local fault): %s", cause, exc_info=cause)
+        else:
+            logger.warning("download stopped by a local fault after %d bytes: %s", received, cause, exc_info=cause)
+        raise cause from None
+    except SourceError as error:
+        discard()
+        logger.warning("download refused: %s", error)
+        raise
+    except DownloadError as error:
+        discard()
+        logger.warning("download failed: %s", error)
+        raise
+    except (TimeoutError, http.client.HTTPException, OSError) as error:
+        discard()
+        if isinstance(error, TimeoutError):
+            failure = DownloadError(f"Se agotó el tiempo de espera de {timeout_s} s al leer la respuesta.")
+        else:
+            failure = DownloadError(f"La conexión se cortó tras {received} bytes: {error}.")
+        logger.warning("download failed: %s", failure)
+        raise failure from error
+    except BaseException:
+        discard()
+        raise
+    assert staging is not None  # a response was read to the end
+    actual = digest.hexdigest()
+    if actual != accepted_sha256:
+        os.replace(staging, part)
+        logger.error("download hash mismatch: got %s, accepted %s; kept %s", actual, accepted_sha256, part)
+        raise SourceError(
+            "V01",
+            f"la huella SHA-256 del CSV descargado es {actual} y la aceptada es {accepted_sha256}; se conservó {part} para inspeccionarlo y no se reemplazó {dest}.",
+            [{"rule_id": "V01", "expected": accepted_sha256, "actual": actual, "kept": str(part)}],
+        )
+    os.replace(staging, dest)
+    try:
+        part.unlink(missing_ok=True)  # the accepted file supersedes what an earlier failure kept for inspection
+    except OSError as error:  # the download is finished and verified: a stale part that cannot be cleared must not turn it into a failure
+        logger.warning("download accepted but the earlier %s could not be removed: %s", part, error)
+    logger.info("download end: %s, %d bytes, sha256 %s", dest, received, actual)
+    return dest, actual
+
+
+# --- manifest of the source ------------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SourceManifest:
+    """The CSV that the interim streams were built from (``<raw_dir>/source_manifest.json``)."""
+
+    mode: str
+    source: str  # the URL, or the local path
+    sha256: str
+    size: int
+    fetched_at: str
+    csv_path: str
+
+
+def read_source_manifest(path: Path) -> SourceManifest | None:
+    """The manifest, or None if there is none. Anything else than the exact format is a ``ValueError``."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    names = {f.name for f in fields(SourceManifest)}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("version") != MANIFEST_VERSION or set(document) != {"version", "source"}:
+            raise KeyError(f"versión o claves inesperadas: {sorted(document)}")
+        raw = document["source"]
+        if set(raw) != names:
+            raise KeyError(f"claves distintas de las esperadas: {sorted(set(raw) ^ names)}")
+        return SourceManifest(**raw)
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise ValueError(f"{path} no es un manifiesto de la fuente válido: {error}") from error
+
+
+def write_source_manifest(path: Path, manifest: SourceManifest) -> None:
+    write_atomic(Path(path), json.dumps({"version": MANIFEST_VERSION, "source": asdict(manifest)}, indent=2, ensure_ascii=False) + "\n")
+
+
+# --- the first task ----------------------------------------------------------------------------------------------------------------
+
+
+class _HasConfig(Protocol):
+    cfg: PipelineConfig
+
+
+def _rejected(csv_path: Path, kind: str, actual: str, expected: str) -> SourceError:
+    return SourceError(
+        "V01",
+        f"el CSV {csv_path} tiene la huella SHA-256 {actual} y la {kind} es {expected}; no se cambió nada (runbook R1).",
+        [{"rule_id": "V01", "expected": expected, "actual": actual, "kept": str(csv_path)}],
+    )
+
+
+def fetch_source(ctx: _HasConfig, *, insecure_hosts: frozenset[str] | set[str] = frozenset()) -> dict[str, Any]:
+    """Task 1: make sure the CSV is the pinned one, read it, and build the interim streams from it.
+
+    http mode downloads the CSV only if it is not in ``raw_dir`` and checks its SHA-256 against ``accepted_sha256`` (V01); local mode registers the first
+    SHA-256 it sees in the manifest, after the content has been read successfully, and rejects any other afterwards. Nothing is written when the source is
+    rejected. The streams are rebuilt only when one is missing or they come from another file, so repeating the task changes nothing.
+    `insecure_hosts` is for tests only (see ``download_file``).
+    """
+    cfg = ctx.cfg
+    source, raw_dir, interim_dir = cfg.source, cfg.paths.raw_dir, cfg.paths.interim_dir
+    manifest_path = raw_dir / MANIFEST_NAME
+    downloaded = False
+
+    if source.mode == "http":
+        csv_path = raw_dir / source.file_name
+        if csv_path.exists():
+            digest = sha256_file(csv_path)
+            if digest != source.accepted_sha256:
+                raise _rejected(csv_path, "aceptada", digest, source.accepted_sha256)
+        else:
+            _, digest = download_file(
+                source.url, csv_path, source.accepted_sha256, source.allowed_hosts, source.max_redirects, source.max_bytes, source.chunk_bytes,
+                source.timeout_s, insecure_hosts=insecure_hosts,
+            )
+            downloaded = True
+        location = source.url
+    else:
+        if source.local_path is None:
+            raise ValueError("[source] local_path: con mode = 'local' hace falta la ruta del CSV")
+        csv_path = source.local_path
+        if not csv_path.is_file():
+            raise FileNotFoundError(f"no existe el CSV local: {csv_path}")
+        digest = sha256_file(csv_path)
+        registered = read_source_manifest(manifest_path)
+        if registered is not None and registered.sha256 != digest:
+            raise _rejected(csv_path, "registrada", digest, registered.sha256)
+        location = str(csv_path)
+
+    size = csv_path.stat().st_size
+    manifest = SourceManifest(
+        mode=source.mode, source=location, sha256=digest, size=size, fetched_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        csv_path=csv_path.name if source.mode == "http" else str(csv_path),
+    )
+    result: dict[str, Any] = {"csv_path": str(csv_path), "sha256": digest, "size": size, "downloaded": downloaded}
+
+    if interim_fingerprint(interim_dir) == digest:
+        report = load_source_report(interim_dir)
+        current = read_source_manifest(manifest_path)
+        if current is None or current.sha256 != digest:
+            write_source_manifest(manifest_path, manifest)
+        logger.info("interim streams already built from %s", digest)
+        return result | {"built": False, "lines": report.lines, "orders": report.orders, "task_orders": report.task_orders}
+
+    frames, report = read_source(csv_path, cfg)
+    write_interim(frames, report, interim_dir, digest)
+    write_source_manifest(manifest_path, manifest)
+    return result | {"built": True, "lines": report.lines, "orders": report.orders, "task_orders": report.task_orders}
