@@ -20,6 +20,7 @@ from latedel.deliveries import delivery_plan, publish, read_delivery
 from latedel.features import build_features, read_order_frames
 from latedel.ingest import read_source
 from latedel.model import predict_risk, train_model
+from latedel.scoring import RunMeta, score_new_orders
 from latedel.split import blocks, labelled_orders
 from latedel.threshold import sensitivity, v2_threshold
 from latedel.warehouse import connect, load_delivery, rebuild_at
@@ -237,6 +238,32 @@ def test_changing_a_label_that_is_known_on_the_date_does_change_the_model_and_th
     assert flipped_v2 > 100
     c = trained_at(changed, as_of, config)
     assert v2_threshold(c.valid_v2, config) != v2_threshold(b.valid_v2, config)
+
+
+def test_the_scores_and_flags_of_a_date_do_not_depend_on_later_data(delivered, launch_pair, tmp_path):
+    config = launch_pair.config
+    model, threshold = launch_pair.a.model, v2_threshold(launch_pair.a.valid_v2, config).threshold      # the model frozen at the launch
+    spec = delivered[1][1]                                                                              # the delivery of January 2017
+    clean = connect(tmp_path / "clean.sqlite")
+    load_through(clean, delivered, config, 2)                         # the warehouse as it was on the date
+    messy = connect(tmp_path / "messy.sqlite")
+    load_through(messy, delivered, config, 15)                        # the warehouse today, with everything that happened later
+    done = tamper_after(messy, spec.as_of)
+    assert done["deleted"] > 20 and done["changed"] > 40 and done["unknown_outcomes"] > 0
+    rebuild_at(messy, spec.as_of, config)
+    meta = RunMeta("run-x", spec.as_of, "v1")
+    a = score_new_orders(clean, spec.delivery_id, model, threshold, meta)
+    b = score_new_orders(messy, spec.delivery_id, model, threshold, meta)
+    query = "SELECT order_id, as_of_date, run_key, model_version, risk, threshold, is_alert FROM model_scores ORDER BY order_id"
+    assert a.scored == b.scored > 50 and a.alerts == b.alerts
+    assert clean.execute(query).fetchall() == messy.execute(query).fetchall(), "every risk and every flag of the date, exactly"
+    # the control: what the date does let in (the variables of the orders of the delivery themselves) moves the scores
+    changed = connect(tmp_path / "changed.sqlite")
+    load_through(changed, delivered, config, 2)
+    changed.execute("UPDATE raw_orders SET shipping_mode = 'Same Day', order_ts = substr(order_ts, 1, 11) || '15:00' WHERE delivery_id = ?", (spec.delivery_id,))
+    rebuild_at(changed, spec.as_of, config)
+    score_new_orders(changed, spec.delivery_id, model, threshold, meta)
+    assert changed.execute(query).fetchall() != clean.execute(query).fetchall()
 
 
 # --- the real file (real_data) -----------------------------------------------------------------------------------------------------------

@@ -192,3 +192,63 @@ def real_trained(cfg, real_launch_db: Path, tmp_path_factory: pytest.TempPathFac
         return train_model(conn, cfg.deliveries.launch_date, cfg)
     finally:
         conn.close()
+
+
+@pytest.fixture(scope="session")
+def tmp_paths_cfg(cfg):
+    """Factory: tmp_paths_cfg(folder, **overrides) -> the configuration with a small grid and the seal and the models of the model in `folder` (never in the project)."""
+    from dataclasses import replace
+
+    from tests.fixtures.model_helpers import small_cfg
+
+    def build(folder: Path, *, sets=("f0", "f1", "f2"), costs: dict | None = None):
+        base = small_cfg(cfg, sets)
+        base = replace(base, model=replace(base.model, max_iter=40))            # a few trees: these tests are about what is saved and sealed, not about the fit
+        base = replace(base, paths=replace(base.paths, seal=folder / "reports" / "model_seal.json", models_dir=folder / "models"))
+        return replace(base, costs=replace(base.costs, **costs)) if costs else base
+
+    return build
+
+
+@pytest.fixture(scope="session")
+def fitted_launch(cfg, launch_db, tmp_paths_cfg, tmp_path_factory: pytest.TempPathFactory):
+    """The fixture's model trained, registered and sealed once at the launch, with its seal and artifact in a temporary folder: ``(cfg, db path, result, folder)``.
+
+    Tests that only read it share it; tests that change something copy the database and the folder first.
+    """
+    from types import SimpleNamespace
+
+    from latedel.launch import fit_model
+    from latedel.warehouse import connect
+
+    folder = tmp_path_factory.mktemp("fitted_launch")
+    config = tmp_paths_cfg(folder)
+    db = folder / "fitted.sqlite"
+    shutil.copyfile(launch_db, db)
+    conn = connect(db)
+    result = fit_model(conn, config, run_key="run-L2017-01-07", as_of=config.deliveries.launch_date, source_sha256="ab" * 32)
+    conn.close()
+    return SimpleNamespace(cfg=config, db=db, result=result, folder=folder)
+
+
+@pytest.fixture(scope="session")
+def real_fitted(cfg, real_launch_db: Path, real_read, tmp_path_factory: pytest.TempPathFactory):
+    """The real model trained (24 candidates), registered and sealed once at the launch, with its seal and artifact in a temporary folder (never in the project):
+    ``(cfg, db path, result, folder, plan, deliveries folder, entries)``. Needs the real CSV. Nothing of the test block is read."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from latedel.deliveries import delivery_plan, publish
+    from latedel.launch import fit_model
+    from latedel.warehouse import connect
+
+    folder = tmp_path_factory.mktemp("real_fitted")
+    config = replace(cfg, paths=replace(cfg.paths, seal=folder / "reports" / "model_seal.json", models_dir=folder / "models"))
+    db = folder / "real.sqlite"
+    shutil.copyfile(real_launch_db, db)
+    conn = connect(db)
+    result = fit_model(conn, config, run_key="real-L2017-01-07", as_of=config.deliveries.launch_date, source_sha256=config.source.accepted_sha256)
+    conn.close()
+    plan = delivery_plan(config.deliveries)
+    entries = [publish(spec, real_read[0], folder / "deliveries", source_sha256=config.source.accepted_sha256) for spec in plan[:3]]
+    return SimpleNamespace(cfg=config, db=db, result=result, folder=folder, plan=plan, deliveries=folder / "deliveries", entries=entries)
