@@ -9,7 +9,6 @@ import json
 import os
 from dataclasses import replace
 from datetime import date
-from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -262,5 +261,5 @@ def test_a_write_that_fails_leaves_the_seal_as_it_was_and_no_temporary_file(cfg,
     assert path.read_bytes() == sealed and [p.name for p in tmp_path.iterdir()] == ["seal.json"]
 
 
-def test_the_seal_of_the_project_is_not_written_by_the_tests(project_root: Path):
-    assert not (project_root / "reports" / "model_seal.json").exists(), "the real run (U25) writes it; no test does"
+def test_the_seal_of_the_project_is_not_written_by_the_tests(project_seal_unchanged):
+    assert project_seal_unchanged(), "the real run (U25) writes it; no test writes or changes it"

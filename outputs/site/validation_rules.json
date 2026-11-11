@@ -1,0 +1,317 @@
+{
+ "as_of": "2018-02-07",
+ "attribution": "Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5 (CC BY 4.0)",
+ "rules": [
+  {
+   "name_es": "El CSV tiene la huella aceptada (o la registrada, en modo local)",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V01",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Descarga segura y tamaño: HTTPS en cada salto, host permitido, redirecciones y bytes dentro del límite",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V02",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Codificación cp1252 estricta, sin bytes nulos ni marca de orden de bytes, con saltos CRLF o LF",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V03",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "El encabezado tiene las 53 columnas exactas, en orden",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V04",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada fila tiene 53 campos, las fechas, los enteros y los decimales convierten y los días no son negativos",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V05",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "El correo y la contraseña del cliente están enmascarados en todas las filas",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V06",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada línea tiene su identificador y cada pedido un solo valor en sus columnas constantes",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V07",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "En los pedidos no cancelados, la etiqueta es «días reales mayores que los programados»",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V08",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada resultado se conoce dentro de los días que cubre la purga",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V09",
+   "scope": "source",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Pedido con días programados distintos de los de su modo de envío",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V10",
+   "scope": "source",
+   "severity": "warning",
+   "status": "pass"
+  },
+  {
+   "name_es": "Pedido cancelado (queda fuera de la tarea; se puntúa si es nuevo)",
+   "orders": 2855,
+   "rows": 7754,
+   "rule_id": "V11",
+   "scope": "source",
+   "severity": "warning",
+   "status": "warn"
+  },
+  {
+   "name_es": "Columnas repetidas que no coinciden (se usa una copia)",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V12",
+   "scope": "source",
+   "severity": "warning",
+   "status": "pass"
+  },
+  {
+   "name_es": "Importes que no cuadran: ventas contra precio por cantidad, o total contra ventas menos descuento",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V13",
+   "scope": "source",
+   "severity": "warning",
+   "status": "pass"
+  },
+  {
+   "name_es": "Espacios finales en el nombre del producto (se recortan)",
+   "orders": 1774,
+   "rows": 1774,
+   "rule_id": "V14",
+   "scope": "source",
+   "severity": "warning",
+   "status": "warn"
+  },
+  {
+   "name_es": "Columnas personales descartadas en la lectura",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V15",
+   "scope": "source",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Columnas constantes, vacías o repetidas que no se llevan",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V16",
+   "scope": "source",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Pedidos desde el cambio de forma de 2017-10 (régimen posterior)",
+   "orders": 8403,
+   "rows": 8557,
+   "rule_id": "V17",
+   "scope": "source",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Columnas apartadas al flujo de resultados",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V18",
+   "scope": "source",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "La entrega es la siguiente del plan y sus períodos empiezan el día siguiente al fin de los de la anterior",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V20",
+   "scope": "delivery",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada pedido tiene su fecha dentro del período de pedidos y cada resultado la suya dentro del de resultados",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V21",
+   "scope": "delivery",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Ningún pedido, línea ni resultado está ya cargado ni repetido dentro de la entrega",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V22",
+   "scope": "delivery",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada línea y cada resultado corresponde a un pedido cargado o de la misma entrega",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V23",
+   "scope": "delivery",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "La entrega no está vacía y sus filas y su SHA-256 son los del manifiesto",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "V24",
+   "scope": "delivery",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Trampa de fuga: el AUC del candidato elegido en la primera mitad de la validación está por debajo del límite",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "M01",
+   "scope": "model",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Las columnas de la matriz son las del conjunto elegido y ninguna es de resultado ni personal",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "M02",
+   "scope": "model",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "El artefacto del modelo tiene la huella registrada (se comprueba antes de cargarlo)",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "M03",
+   "scope": "model",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "Cada pedido nuevo tiene una probabilidad finita en [0, 1]",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "M04",
+   "scope": "model",
+   "severity": "blocking",
+   "status": "pass"
+  },
+  {
+   "name_es": "La configuración es distinta de la sellada (el resultado se guarda aparte, como posterior al sello)",
+   "orders": 0,
+   "rows": 0,
+   "rule_id": "M05",
+   "scope": "model",
+   "severity": "warning",
+   "status": "pass"
+  },
+  {
+   "name_es": "Pedidos nuevos en la entrega",
+   "orders": 65752,
+   "rows": 180519,
+   "rule_id": "I01",
+   "scope": "delivery",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Alertas emitidas y porcentaje de pedidos alertados",
+   "orders": 179458,
+   "rows": 66761,
+   "rule_id": "I02",
+   "scope": "model",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Resultados que llegaron en la entrega",
+   "orders": 65752,
+   "rows": 65752,
+   "rule_id": "I03",
+   "scope": "delivery",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Alertas sobre pedidos que después se cancelaron",
+   "orders": 7691,
+   "rows": 3156,
+   "rule_id": "I04",
+   "scope": "model",
+   "severity": "info",
+   "status": "pass"
+  },
+  {
+   "name_es": "Pedidos de la entrega desde el cambio de forma de 2017-10",
+   "orders": 8403,
+   "rows": 8557,
+   "rule_id": "I05",
+   "scope": "delivery",
+   "severity": "info",
+   "status": "pass"
+  }
+ ],
+ "run_key": "20261111T113954030322Z",
+ "schema_version": 1,
+ "source_sha256": "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6",
+ "totals": {
+  "deliveries_loaded": 15,
+  "deliveries_rejected": 0,
+  "leaking_columns_set_aside": 8,
+  "orders_cancelled": 2855,
+  "orders_raw": 65752,
+  "orders_task": 62897,
+  "personal_columns_dropped": 15,
+  "rows_cancelled": 7754,
+  "rows_raw": 180519
+ }
+}

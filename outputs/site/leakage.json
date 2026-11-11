@@ -1,0 +1,253 @@
+{
+ "as_of": "2018-02-07",
+ "attribution": "Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5 (CC BY 4.0)",
+ "columns": [
+  {
+   "auc_with_mode_valid": 1.0,
+   "column": "Days for shipping (real)",
+   "column_es": "Días de envío reales",
+   "kind": "leak",
+   "known_at_es": "Después de la entrega",
+   "note_es": "La etiqueta es esta columna menos los días programados: con el modo (que fija los programados) la respuesta es exacta."
+  },
+  {
+   "auc_with_mode_valid": 0.742,
+   "column": "Benefit per order",
+   "column_es": "Beneficio por pedido",
+   "kind": "precaution",
+   "known_at_es": "Momento no establecido",
+   "note_es": "Se excluye por precaución: no consta cuándo se calcula; dentro de cada modo las líneas tarde tienen un beneficio algo menor."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Sales per customer",
+   "column_es": "Sales per customer",
+   "kind": "duplicate",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Repite otra columna de la fuente: se lleva una sola copia."
+  },
+  {
+   "auc_with_mode_valid": 1.0,
+   "column": "Delivery Status",
+   "column_es": "Estado de entrega",
+   "kind": "leak",
+   "known_at_es": "Después de la entrega",
+   "note_es": "Dice si el pedido llegó tarde, a tiempo o adelantado: es la respuesta escrita con otras palabras."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Late_delivery_risk",
+   "column_es": "Late_delivery_risk",
+   "kind": "target",
+   "known_at_es": "Después de la entrega",
+   "note_es": "Es la etiqueta, escrita con otras palabras: los días reales superan a los programados."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer City",
+   "column_es": "Customer City",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Email",
+   "column_es": "Customer Email",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Fname",
+   "column_es": "Customer Fname",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Id",
+   "column_es": "Customer Id",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Lname",
+   "column_es": "Customer Lname",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Password",
+   "column_es": "Customer Password",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer State",
+   "column_es": "Customer State",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Street",
+   "column_es": "Customer Street",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Customer Zipcode",
+   "column_es": "Customer Zipcode",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Latitude",
+   "column_es": "Latitude",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Longitude",
+   "column_es": "Longitude",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Order City",
+   "column_es": "Order City",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Order Customer Id",
+   "column_es": "Order Customer Id",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Order Item Product Price",
+   "column_es": "Order Item Product Price",
+   "kind": "duplicate",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Repite otra columna de la fuente: se lleva una sola copia."
+  },
+  {
+   "auc_with_mode_valid": 0.745,
+   "column": "Order Item Profit Ratio",
+   "column_es": "Razón de ganancia por línea",
+   "kind": "precaution",
+   "known_at_es": "Momento no establecido",
+   "note_es": "Se excluye por precaución, igual que el beneficio."
+  },
+  {
+   "auc_with_mode_valid": 0.742,
+   "column": "Order Profit Per Order",
+   "column_es": "Ganancia por pedido",
+   "kind": "precaution",
+   "known_at_es": "Momento no establecido",
+   "note_es": "Es la misma columna que el beneficio por pedido (V12): el almacén guarda una sola copia."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Order State",
+   "column_es": "Order State",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": 0.739,
+   "column": "Order Status",
+   "column_es": "Estado del pedido",
+   "kind": "leak",
+   "known_at_es": "Después de crear el pedido",
+   "note_es": "Cambia con el avance del pedido (completo, cancelado, en revisión); se conoce después de crearlo."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Order Zipcode",
+   "column_es": "Order Zipcode",
+   "kind": "personal",
+   "known_at_es": "Al crear el pedido, pero no se lleva",
+   "note_es": "Dato personal: se descarta al leer el archivo y no llega a ninguna salida; aquí solo figura su nombre."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Product Card Id",
+   "column_es": "Product Card Id",
+   "kind": "duplicate",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Repite otra columna de la fuente: se lleva una sola copia."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Product Category Id",
+   "column_es": "Product Category Id",
+   "kind": "duplicate",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Repite otra columna de la fuente: se lleva una sola copia."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Product Description",
+   "column_es": "Product Description",
+   "kind": "constant",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Constante, vacía o una dirección: no aporta información al modelo."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Product Image",
+   "column_es": "Product Image",
+   "kind": "constant",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Constante, vacía o una dirección: no aporta información al modelo."
+  },
+  {
+   "auc_with_mode_valid": null,
+   "column": "Product Status",
+   "column_es": "Product Status",
+   "kind": "constant",
+   "known_at_es": "No es una variable del pedido",
+   "note_es": "Constante, vacía o una dirección: no aporta información al modelo."
+  },
+  {
+   "auc_with_mode_valid": 0.998,
+   "column": "shipping date (DateOrders)",
+   "column_es": "Fecha de envío (horas desde el pedido)",
+   "kind": "leak",
+   "known_at_es": "Al despachar",
+   "note_es": "Es el pedido más 12, 48 o de 48 a 144 horas según el modo: ya contiene la demora que se quiere predecir."
+  }
+ ],
+ "reference": {
+  "auc_mode_only_valid": 0.743,
+  "auc_selected_model_valid": 0.776
+ },
+ "run_key": "20261111T113954030322Z",
+ "schema_version": 1,
+ "source_sha256": "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6"
+}

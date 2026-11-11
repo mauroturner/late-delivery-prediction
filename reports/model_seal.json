@@ -1,0 +1,173 @@
+{
+ "launch": {
+  "as_of": "2017-01-07",
+  "calibration": "isotonic",
+  "config_sha256": "4fef2b2e7a1dc155ef8d5d25bd40516add9ce7c2944fefbc9146b37612b262fa",
+  "costs": {
+   "alert_cost": 5.0,
+   "effect": 0.5,
+   "late_cost": 20.0
+  },
+  "criteria": {
+   "c06_max_bias": 0.02,
+   "c06_max_ece": 0.03,
+   "leak_tripwire_auc": 0.95
+  },
+  "feature_set": "f2",
+  "model_version": "v1",
+  "params": {
+   "l2_regularization": 1.0,
+   "learning_rate": 0.05,
+   "max_iter": 300,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  "run_key": "20261111T113819924384Z",
+  "source_sha256": "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6",
+  "split": {
+   "post_break_end": "2018-01-31",
+   "post_break_start": "2017-10-01",
+   "purge_days": 7,
+   "test_end": "2017-09-30",
+   "test_start": "2017-01-08",
+   "train_end": "2016-06-30",
+   "train_start": "2015-01-01",
+   "valid_end": "2016-12-31",
+   "valid_start": "2016-07-08",
+   "valid_v2_start": "2016-10-01"
+  },
+  "threshold": 0.66,
+  "valid_v2_scores_sha256": "300f228447df89c16e2e94cc70e1f8774d2cf9f818001aa6a5cc01ee48fbddc4"
+ },
+ "test": {
+  "as_of": "2017-10-31",
+  "config_sha256": "4fef2b2e7a1dc155ef8d5d25bd40516add9ce7c2944fefbc9146b37612b262fa",
+  "criteria": [
+   {
+    "baseline_value": 0.7419550920142737,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C01",
+    "passed": true,
+    "value": 0.7730502846549258
+   },
+   {
+    "baseline_value": 0.0,
+    "ci_high": 0.03596620836788253,
+    "ci_low": 0.02648902865712479,
+    "id": "C02",
+    "passed": true,
+    "value": 0.03109519264065208
+   },
+   {
+    "baseline_value": 0.0,
+    "ci_high": 0.0050655808881625896,
+    "ci_low": -0.006105672456516689,
+    "id": "C03",
+    "passed": false,
+    "value": -0.0006414517919318685
+   },
+   {
+    "baseline_value": 1323.0536242858127,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C04",
+    "passed": true,
+    "value": 1459.3515522819578
+   },
+   {
+    "baseline_value": 1467.2678460797138,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C05",
+    "passed": false,
+    "value": 1459.3515522819578
+   },
+   {
+    "baseline_value": 0.03,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C06",
+    "passed": true,
+    "value": 0.015613807251923455
+   },
+   {
+    "baseline_value": 0.1889721784468484,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C07",
+    "passed": true,
+    "value": 0.17673323220553183
+   },
+   {
+    "baseline_value": 4421.0,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C08",
+    "passed": true,
+    "value": 4499.0
+   },
+   {
+    "baseline_value": 17.0,
+    "ci_high": null,
+    "ci_low": null,
+    "id": "C09",
+    "passed": true,
+    "value": 17.0
+   }
+  ],
+  "metrics": {
+   "b2_mode": {
+    "auc": 0.7419550920142737,
+    "bias": 0.002547831602637274,
+    "brier": 0.1889721784468484,
+    "ece": 0.002547831602637247,
+    "flagged_share": 0.3440490121842087,
+    "late_rate": 0.5699043161010532,
+    "nb_per_1000": 1323.0536242858127,
+    "nb_total": 19220.0,
+    "orders": 14527.0,
+    "pr_auc": 0.7819140380022394,
+    "precision": 0.8845538215286114,
+    "recall": 0.5340016910254862,
+    "threshold": 0.5,
+    "topk_k": 4998.0,
+    "topk_late": 4421.0
+   },
+   "b5_mode_noon": {
+    "auc": 0.7736917364468576,
+    "bias": 0.0059209980438208465,
+    "brier": 0.17510808744653095,
+    "ece": 0.005920998043820866,
+    "flagged_share": 0.3728918565429889,
+    "late_rate": 0.5699043161010532,
+    "nb_per_1000": 1467.2678460797138,
+    "nb_total": 21315.0,
+    "orders": 14527.0,
+    "pr_auc": 0.8214612540302653,
+    "precision": 0.8934834779398191,
+    "recall": 0.5846116680758545,
+    "threshold": 0.8
+   },
+   "model": {
+    "auc": 0.7730502846549258,
+    "bias": -0.006460768775790604,
+    "brier": 0.17673323220553183,
+    "ece": 0.015613807251923455,
+    "flagged_share": 0.37075789908446344,
+    "late_rate": 0.5699043161010532,
+    "nb_per_1000": 1459.3515522819578,
+    "nb_total": 21200.0,
+    "orders": 14527.0,
+    "pr_auc": 0.8221574602503263,
+    "precision": 0.8936130709246194,
+    "recall": 0.5813504046382413,
+    "threshold": 0.66,
+    "topk_k": 4998.0,
+    "topk_late": 4499.0
+   }
+  },
+  "run_key": "20261111T113930813088Z"
+ },
+ "version": 1
+}

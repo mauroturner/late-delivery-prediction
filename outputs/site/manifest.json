@@ -1,0 +1,29 @@
+{
+ "as_of": "2018-02-07",
+ "attribution": "Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5 (CC BY 4.0)",
+ "files": {
+  "alerts.json": {
+   "bytes": 6256,
+   "sha256": "c90a4144cf70fab71821f0d324e5c095aa916fd1a2259657887718702b67c592"
+  },
+  "algorithms.json": {
+   "bytes": 32079,
+   "sha256": "7e9fae91cee078dff08ce67345bc1cc1ea9b76ba3c1d5bd95d908257f5faf5b0"
+  },
+  "leakage.json": {
+   "bytes": 9321,
+   "sha256": "a3c33131de7ab103d3d7b453b930e2db24da41acbc8534b7cbeb92679ddd2ffb"
+  },
+  "summary.json": {
+   "bytes": 6143,
+   "sha256": "51445cbee471c1ccf9cb1546f91ad780b2bcf924089e299813239b2451c43d2b"
+  },
+  "validation_rules.json": {
+   "bytes": 7928,
+   "sha256": "0ff81cb30e0fe8ad45f771454a85c20e1440015e8588a5ffea69ace9bbe9ebc8"
+  }
+ },
+ "run_key": "20261111T113954030322Z",
+ "schema_version": 1,
+ "source_sha256": "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6"
+}

@@ -60,7 +60,7 @@ def quick(tmp_path_factory):
         shutil.rmtree(QUICK, ignore_errors=True)
 
 
-def test_quick_replay_from_other_cwd_touches_only_data_quick(quick):
+def test_quick_replay_from_other_cwd_touches_only_data_quick(quick, project_seal_unchanged):
     assert quick["made"].returncode == 0, quick["made"].stderr
     assert quick["replayed"].returncode == 0, quick["replayed"].stderr
     assert quick["after"] == quick["before"]    # not a byte, not a modification time, outside data/quick/
@@ -68,7 +68,7 @@ def test_quick_replay_from_other_cwd_touches_only_data_quick(quick):
     assert (QUICK / "latedel.sqlite").is_file() and (QUICK / "outputs" / "powerbi" / "fact_order.parquet").is_file()
     assert (QUICK / "outputs" / "site" / "summary.json").is_file() and (QUICK / "dashboard" / "powerbi-design.html").is_file()
     assert (QUICK / "reports" / "evaluation_summary.json").is_file() and (QUICK / "reports" / "model_seal.json").is_file()   # the seal of the quick run, in the quick folder
-    assert not (PROJECT / "reports" / "model_seal.json").exists() and not (PROJECT / "outputs").exists()   # the versioned ones are U25's
+    assert project_seal_unchanged()   # the versioned seal and outputs are U25's: the quick run leaves them as it found them (the fingerprint above covers outputs/)
 
 
 def test_the_quick_flow_ran_every_task_for_the_launch_and_for_january(quick):

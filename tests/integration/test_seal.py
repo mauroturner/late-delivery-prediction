@@ -304,7 +304,7 @@ def test_fitting_again_gives_the_same_scores_of_v2_in_any_warehouse(cfg, launch_
 
 
 @pytest.mark.real_data
-def test_real_launch_is_sealed_and_a_rebuild_from_scratch_reproduces_it(cfg, real_launch_db, real_fitted, real_trained, tmp_path):
+def test_real_launch_is_sealed_and_a_rebuild_from_scratch_reproduces_it(cfg, real_launch_db, real_fitted, real_trained, tmp_path, project_seal_unchanged):
     config, result = real_fitted.cfg, real_fitted.result
     seal = read_seal(config.paths.seal)
     print("REAL launch", {k: result[k] for k in ("feature_set", "params", "threshold", "break_even", "seal_state", "orders")})
@@ -322,4 +322,4 @@ def test_real_launch_is_sealed_and_a_rebuild_from_scratch_reproduces_it(cfg, rea
     conn.close()
     assert again["seal_state"] == "match" and again["valid_v2_scores_sha256"] == result["valid_v2_scores_sha256"] and again["artifact_sha256"] == result["artifact_sha256"]
     assert config.paths.seal.read_bytes() == sealed
-    assert not (Path(__file__).resolve().parents[2] / "reports" / "model_seal.json").exists()
+    assert project_seal_unchanged(), "the seal of these tests is in a temporary folder: the project's is the real run's (U25)"

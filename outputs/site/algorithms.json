@@ -1,0 +1,1803 @@
+{
+ "as_of": "2018-02-07",
+ "attribution": "Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5 (CC BY 4.0)",
+ "calibration": [
+  {
+   "bin": 0,
+   "observed": 0.016,
+   "orders": 387,
+   "p_mean": 0.001,
+   "suppressed": false
+  },
+  {
+   "bin": 1,
+   "observed": 0.328,
+   "orders": 198,
+   "p_mean": 0.167,
+   "suppressed": false
+  },
+  {
+   "bin": 2,
+   "observed": null,
+   "orders": null,
+   "p_mean": null,
+   "suppressed": true
+  },
+  {
+   "bin": 3,
+   "observed": 0.397,
+   "orders": 4195,
+   "p_mean": 0.372,
+   "suppressed": false
+  },
+  {
+   "bin": 4,
+   "observed": 0.394,
+   "orders": 4316,
+   "p_mean": 0.401,
+   "suppressed": false
+  },
+  {
+   "bin": 5,
+   "observed": null,
+   "orders": null,
+   "p_mean": null,
+   "suppressed": true
+  },
+  {
+   "bin": 6,
+   "observed": 0.872,
+   "orders": 47,
+   "p_mean": 0.665,
+   "suppressed": false
+  },
+  {
+   "bin": 7,
+   "observed": 0.791,
+   "orders": 2513,
+   "p_mean": 0.798,
+   "suppressed": false
+  },
+  {
+   "bin": 8,
+   "observed": 0.817,
+   "orders": 175,
+   "p_mean": 0.866,
+   "suppressed": false
+  },
+  {
+   "bin": 9,
+   "observed": 0.996,
+   "orders": 2654,
+   "p_mean": 1.0,
+   "suppressed": false
+  }
+ ],
+ "cost_curve": [
+  {
+   "break_even": 0.1,
+   "flagged_share_model": 0.974,
+   "nb_b2_mode": 4699.0,
+   "nb_b5_mode_noon": 4725.0,
+   "nb_model": 4722.7,
+   "threshold_model": 0.09
+  },
+  {
+   "break_even": 0.15,
+   "flagged_share_model": 0.959,
+   "nb_b2_mode": 4199.0,
+   "nb_b5_mode_noon": 4238.0,
+   "nb_model": 4207.0,
+   "threshold_model": 0.32
+  },
+  {
+   "break_even": 0.2,
+   "flagged_share_model": 0.959,
+   "nb_b2_mode": 3699.0,
+   "nb_b5_mode_noon": 3750.9,
+   "nb_model": 3727.5,
+   "threshold_model": 0.32
+  },
+  {
+   "break_even": 0.25,
+   "flagged_share_model": 0.959,
+   "nb_b2_mode": 3199.0,
+   "nb_b5_mode_noon": 3263.9,
+   "nb_model": 3248.1,
+   "threshold_model": 0.32
+  },
+  {
+   "break_even": 0.3,
+   "flagged_share_model": 0.959,
+   "nb_b2_mode": 2699.0,
+   "nb_b5_mode_noon": 2776.9,
+   "nb_model": 2768.6,
+   "threshold_model": 0.32
+  },
+  {
+   "break_even": 0.35,
+   "flagged_share_model": 0.959,
+   "nb_b2_mode": 2199.0,
+   "nb_b5_mode_noon": 2289.9,
+   "nb_model": 2289.2,
+   "threshold_model": 0.32
+  },
+  {
+   "break_even": 0.4,
+   "flagged_share_model": 0.857,
+   "nb_b2_mode": 1699.0,
+   "nb_b5_mode_noon": 1825.4,
+   "nb_model": 1811.5,
+   "threshold_model": 0.33
+  },
+  {
+   "break_even": 0.45,
+   "flagged_share_model": 0.374,
+   "nb_b2_mode": 1495.1,
+   "nb_b5_mode_noon": 1653.7,
+   "nb_model": 1651.5,
+   "threshold_model": 0.45
+  },
+  {
+   "break_even": 0.5,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 1323.1,
+   "nb_b5_mode_noon": 1467.3,
+   "nb_model": 1459.4,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.55,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 1151.0,
+   "nb_b5_mode_noon": 1280.8,
+   "nb_model": 1274.0,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.6,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 979.0,
+   "nb_b5_mode_noon": 1094.4,
+   "nb_model": 1088.6,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.65,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 807.0,
+   "nb_b5_mode_noon": 907.9,
+   "nb_model": 903.2,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.7,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 635.0,
+   "nb_b5_mode_noon": 721.5,
+   "nb_model": 717.8,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.75,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 462.9,
+   "nb_b5_mode_noon": 535.0,
+   "nb_model": 532.5,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.8,
+   "flagged_share_model": 0.371,
+   "nb_b2_mode": 290.9,
+   "nb_b5_mode_noon": 348.6,
+   "nb_model": 347.1,
+   "threshold_model": 0.66
+  },
+  {
+   "break_even": 0.85,
+   "flagged_share_model": 0.182,
+   "nb_b2_mode": 226.2,
+   "nb_b5_mode_noon": 269.5,
+   "nb_model": 267.5,
+   "threshold_model": 0.99
+  },
+  {
+   "break_even": 0.9,
+   "flagged_share_model": 0.182,
+   "nb_b2_mode": 150.8,
+   "nb_b5_mode_noon": 179.7,
+   "nb_model": 176.3,
+   "threshold_model": 0.99
+  }
+ ],
+ "examples": [
+  {
+   "is_alert": true,
+   "label": "Pedido A",
+   "market": null,
+   "mode": "First Class",
+   "mode_es": "Primera clase",
+   "month": null,
+   "n_lines": 5,
+   "order_hour": 14,
+   "outcome": "tarde",
+   "real_days": 2,
+   "risk": 1.0,
+   "rule_es": "Riesgo mediano de los pedidos First Class de la prueba",
+   "scheduled_days": 1,
+   "weekday_es": null
+  },
+  {
+   "is_alert": true,
+   "label": "Pedido B",
+   "market": "LATAM",
+   "mode": "Second Class",
+   "mode_es": "Segunda clase",
+   "month": null,
+   "n_lines": null,
+   "order_hour": 8,
+   "outcome": "tarde",
+   "real_days": null,
+   "risk": 0.8,
+   "rule_es": "Riesgo mediano de los pedidos Second Class de la prueba",
+   "scheduled_days": 2,
+   "weekday_es": null
+  },
+  {
+   "is_alert": false,
+   "label": "Pedido C",
+   "market": "Europe",
+   "mode": "Standard Class",
+   "mode_es": "Clase estándar",
+   "month": null,
+   "n_lines": null,
+   "order_hour": 11,
+   "outcome": "tarde",
+   "real_days": 6,
+   "risk": 0.4,
+   "rule_es": "Riesgo mediano de los pedidos Standard Class de la prueba",
+   "scheduled_days": 4,
+   "weekday_es": null
+  },
+  {
+   "is_alert": false,
+   "label": "Pedido D",
+   "market": "LATAM",
+   "mode": "Same Day",
+   "mode_es": "Mismo día",
+   "month": null,
+   "n_lines": null,
+   "order_hour": 3,
+   "outcome": "a tiempo",
+   "real_days": 0,
+   "risk": 0.0,
+   "rule_es": "Riesgo mediano de los Same Day antes del mediodía de la prueba",
+   "scheduled_days": 0,
+   "weekday_es": null
+  },
+  {
+   "is_alert": true,
+   "label": "Pedido E",
+   "market": "LATAM",
+   "mode": "Same Day",
+   "mode_es": "Mismo día",
+   "month": null,
+   "n_lines": null,
+   "order_hour": 19,
+   "outcome": "tarde",
+   "real_days": 1,
+   "risk": 1.0,
+   "rule_es": "Riesgo mediano de los Same Day desde el mediodía de la prueba",
+   "scheduled_days": 0,
+   "weekday_es": null
+  }
+ ],
+ "hour_profile": [
+  {
+   "hour": 0,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 66
+  },
+  {
+   "hour": 1,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 65
+  },
+  {
+   "hour": 2,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 59
+  },
+  {
+   "hour": 3,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 84
+  },
+  {
+   "hour": 4,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 70
+  },
+  {
+   "hour": 5,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 68
+  },
+  {
+   "hour": 6,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 84
+  },
+  {
+   "hour": 7,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 60
+  },
+  {
+   "hour": 8,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 79
+  },
+  {
+   "hour": 9,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 76
+  },
+  {
+   "hour": 10,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 68
+  },
+  {
+   "hour": 11,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 0.0,
+   "train_orders": 74
+  },
+  {
+   "hour": 12,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 87
+  },
+  {
+   "hour": 13,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 60
+  },
+  {
+   "hour": 14,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 58
+  },
+  {
+   "hour": 15,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 69
+  },
+  {
+   "hour": 16,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 50
+  },
+  {
+   "hour": 17,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 69
+  },
+  {
+   "hour": 18,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 54
+  },
+  {
+   "hour": 19,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 62
+  },
+  {
+   "hour": 20,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 54
+  },
+  {
+   "hour": 21,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 57
+  },
+  {
+   "hour": 22,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 70
+  },
+  {
+   "hour": 23,
+   "mode": "Same Day",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 52
+  },
+  {
+   "hour": 0,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 184
+  },
+  {
+   "hour": 1,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 204
+  },
+  {
+   "hour": 2,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 175
+  },
+  {
+   "hour": 3,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 154
+  },
+  {
+   "hour": 4,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 181
+  },
+  {
+   "hour": 5,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 172
+  },
+  {
+   "hour": 6,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 166
+  },
+  {
+   "hour": 7,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 185
+  },
+  {
+   "hour": 8,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 165
+  },
+  {
+   "hour": 9,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 190
+  },
+  {
+   "hour": 10,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 185
+  },
+  {
+   "hour": 11,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 158
+  },
+  {
+   "hour": 12,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 199
+  },
+  {
+   "hour": 13,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 207
+  },
+  {
+   "hour": 14,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 202
+  },
+  {
+   "hour": 15,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 206
+  },
+  {
+   "hour": 16,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 194
+  },
+  {
+   "hour": 17,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 222
+  },
+  {
+   "hour": 18,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 198
+  },
+  {
+   "hour": 19,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 182
+  },
+  {
+   "hour": 20,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 216
+  },
+  {
+   "hour": 21,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 198
+  },
+  {
+   "hour": 22,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 187
+  },
+  {
+   "hour": 23,
+   "mode": "First Class",
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 211
+  },
+  {
+   "hour": 0,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.806,
+   "train_orders": 237
+  },
+  {
+   "hour": 1,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.825,
+   "train_orders": 252
+  },
+  {
+   "hour": 2,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.789,
+   "train_orders": 265
+  },
+  {
+   "hour": 3,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.793,
+   "train_orders": 232
+  },
+  {
+   "hour": 4,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.824,
+   "train_orders": 262
+  },
+  {
+   "hour": 5,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.773,
+   "train_orders": 255
+  },
+  {
+   "hour": 6,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.791,
+   "train_orders": 239
+  },
+  {
+   "hour": 7,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.793,
+   "train_orders": 251
+  },
+  {
+   "hour": 8,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.814,
+   "train_orders": 253
+  },
+  {
+   "hour": 9,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.811,
+   "train_orders": 254
+  },
+  {
+   "hour": 10,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.826,
+   "train_orders": 258
+  },
+  {
+   "hour": 11,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.768,
+   "train_orders": 233
+  },
+  {
+   "hour": 12,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.81,
+   "train_orders": 247
+  },
+  {
+   "hour": 13,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.811,
+   "train_orders": 233
+  },
+  {
+   "hour": 14,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.813,
+   "train_orders": 225
+  },
+  {
+   "hour": 15,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.822,
+   "train_orders": 242
+  },
+  {
+   "hour": 16,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.803,
+   "train_orders": 213
+  },
+  {
+   "hour": 17,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.812,
+   "train_orders": 239
+  },
+  {
+   "hour": 18,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.816,
+   "train_orders": 255
+  },
+  {
+   "hour": 19,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.807,
+   "train_orders": 218
+  },
+  {
+   "hour": 20,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.777,
+   "train_orders": 256
+  },
+  {
+   "hour": 21,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.796,
+   "train_orders": 226
+  },
+  {
+   "hour": 22,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.777,
+   "train_orders": 251
+  },
+  {
+   "hour": 23,
+   "mode": "Second Class",
+   "suppressed": false,
+   "train_late_rate": 0.785,
+   "train_orders": 289
+  },
+  {
+   "hour": 0,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.405,
+   "train_orders": 751
+  },
+  {
+   "hour": 1,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.4,
+   "train_orders": 742
+  },
+  {
+   "hour": 2,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.402,
+   "train_orders": 749
+  },
+  {
+   "hour": 3,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.413,
+   "train_orders": 753
+  },
+  {
+   "hour": 4,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.388,
+   "train_orders": 725
+  },
+  {
+   "hour": 5,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.417,
+   "train_orders": 755
+  },
+  {
+   "hour": 6,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.382,
+   "train_orders": 754
+  },
+  {
+   "hour": 7,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.404,
+   "train_orders": 752
+  },
+  {
+   "hour": 8,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.402,
+   "train_orders": 758
+  },
+  {
+   "hour": 9,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.39,
+   "train_orders": 747
+  },
+  {
+   "hour": 10,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.376,
+   "train_orders": 727
+  },
+  {
+   "hour": 11,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.397,
+   "train_orders": 773
+  },
+  {
+   "hour": 12,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.417,
+   "train_orders": 719
+  },
+  {
+   "hour": 13,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.406,
+   "train_orders": 758
+  },
+  {
+   "hour": 14,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.413,
+   "train_orders": 736
+  },
+  {
+   "hour": 15,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.406,
+   "train_orders": 719
+  },
+  {
+   "hour": 16,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.402,
+   "train_orders": 798
+  },
+  {
+   "hour": 17,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.399,
+   "train_orders": 702
+  },
+  {
+   "hour": 18,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.408,
+   "train_orders": 740
+  },
+  {
+   "hour": 19,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.396,
+   "train_orders": 791
+  },
+  {
+   "hour": 20,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.409,
+   "train_orders": 717
+  },
+  {
+   "hour": 21,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.393,
+   "train_orders": 754
+  },
+  {
+   "hour": 22,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.422,
+   "train_orders": 728
+  },
+  {
+   "hour": 23,
+   "mode": "Standard Class",
+   "suppressed": false,
+   "train_late_rate": 0.385,
+   "train_orders": 725
+  }
+ ],
+ "importance": [
+  {
+   "auc_drop": 0.262,
+   "feature": "shipping_mode",
+   "feature_es": "Modo de envío"
+  },
+  {
+   "auc_drop": 0.046,
+   "feature": "order_hour",
+   "feature_es": "Hora del pedido"
+  },
+  {
+   "auc_drop": 0.0012,
+   "feature": "scheduled_days",
+   "feature_es": "Días programados"
+  },
+  {
+   "auc_drop": 0.0006,
+   "feature": "n_lines",
+   "feature_es": "Número de líneas"
+  },
+  {
+   "auc_drop": 0.0002,
+   "feature": "customer_segment",
+   "feature_es": "Segmento del cliente"
+  },
+  {
+   "auc_drop": 0.0002,
+   "feature": "units",
+   "feature_es": "Unidades"
+  },
+  {
+   "auc_drop": 0.0001,
+   "feature": "max_discount_rate",
+   "feature_es": "Mayor tasa de descuento"
+  },
+  {
+   "auc_drop": 0.0,
+   "feature": "payment_type",
+   "feature_es": "Tipo de pago"
+  },
+  {
+   "auc_drop": 0.0,
+   "feature": "market",
+   "feature_es": "Mercado"
+  },
+  {
+   "auc_drop": -0.0,
+   "feature": "customer_country",
+   "feature_es": "País del cliente"
+  }
+ ],
+ "methods": [
+  {
+   "auc": 0.773,
+   "brier": 0.1767,
+   "flagged_share": 0.371,
+   "label_es": "Modelo",
+   "method": "model",
+   "net_benefit_per_1000": 1459.4,
+   "pr_auc": 0.822,
+   "precision": 0.894,
+   "recall": 0.581,
+   "scope": "test",
+   "threshold": 0.66
+  },
+  {
+   "auc": 0.742,
+   "brier": 0.189,
+   "flagged_share": 0.344,
+   "label_es": "B2: tasa de retraso por modo",
+   "method": "b2_mode",
+   "net_benefit_per_1000": 1323.1,
+   "pr_auc": 0.782,
+   "precision": 0.885,
+   "recall": 0.534,
+   "scope": "test",
+   "threshold": 0.5
+  },
+  {
+   "auc": 0.774,
+   "brier": 0.1751,
+   "flagged_share": 0.373,
+   "label_es": "B5: tasa por modo y hora del pedido",
+   "method": "b5_mode_noon",
+   "net_benefit_per_1000": 1467.3,
+   "pr_auc": 0.821,
+   "precision": 0.893,
+   "recall": 0.585,
+   "scope": "test",
+   "threshold": 0.8
+  },
+  {
+   "auc": 0.779,
+   "brier": 0.1747,
+   "flagged_share": 0.377,
+   "label_es": "Modelo",
+   "method": "model",
+   "net_benefit_per_1000": 1501.3,
+   "pr_auc": 0.821,
+   "precision": 0.898,
+   "recall": 0.588,
+   "scope": "post_break",
+   "threshold": 0.66
+  },
+  {
+   "auc": 0.745,
+   "brier": 0.1875,
+   "flagged_share": 0.35,
+   "label_es": "B2: tasa de retraso por modo",
+   "method": "b2_mode",
+   "net_benefit_per_1000": 1362.1,
+   "pr_auc": 0.788,
+   "precision": 0.889,
+   "recall": 0.54,
+   "scope": "post_break",
+   "threshold": 0.5
+  },
+  {
+   "auc": 0.777,
+   "brier": 0.1737,
+   "flagged_share": 0.379,
+   "label_es": "B5: tasa por modo y hora del pedido",
+   "method": "b5_mode_noon",
+   "net_benefit_per_1000": 1505.7,
+   "pr_auc": 0.827,
+   "precision": 0.898,
+   "recall": 0.59,
+   "scope": "post_break",
+   "threshold": 0.8
+  }
+ ],
+ "mode_rates": [
+  {
+   "mode": "Same Day",
+   "mode_es": "Mismo día",
+   "scheduled_days": 0,
+   "suppressed": false,
+   "train_late_rate": 0.465,
+   "train_orders": 1595
+  },
+  {
+   "mode": "First Class",
+   "mode_es": "Primera clase",
+   "scheduled_days": 1,
+   "suppressed": false,
+   "train_late_rate": 1.0,
+   "train_orders": 4541
+  },
+  {
+   "mode": "Second Class",
+   "mode_es": "Segunda clase",
+   "scheduled_days": 2,
+   "suppressed": false,
+   "train_late_rate": 0.802,
+   "train_orders": 5885
+  },
+  {
+   "mode": "Standard Class",
+   "mode_es": "Clase estándar",
+   "scheduled_days": 4,
+   "suppressed": false,
+   "train_late_rate": 0.401,
+   "train_orders": 17873
+  }
+ ],
+ "roc": [
+  {
+   "fpr": 0.0,
+   "method": "model",
+   "tpr": 0.0
+  },
+  {
+   "fpr": 0.0014,
+   "method": "model",
+   "tpr": 0.319
+  },
+  {
+   "fpr": 0.0014,
+   "method": "model",
+   "tpr": 0.3194
+  },
+  {
+   "fpr": 0.0016,
+   "method": "model",
+   "tpr": 0.3194
+  },
+  {
+   "fpr": 0.0016,
+   "method": "model",
+   "tpr": 0.3195
+  },
+  {
+   "fpr": 0.0066,
+   "method": "model",
+   "tpr": 0.3357
+  },
+  {
+   "fpr": 0.0066,
+   "method": "model",
+   "tpr": 0.3358
+  },
+  {
+   "fpr": 0.0067,
+   "method": "model",
+   "tpr": 0.3366
+  },
+  {
+   "fpr": 0.0907,
+   "method": "model",
+   "tpr": 0.5766
+  },
+  {
+   "fpr": 0.0907,
+   "method": "model",
+   "tpr": 0.5768
+  },
+  {
+   "fpr": 0.0917,
+   "method": "model",
+   "tpr": 0.5812
+  },
+  {
+   "fpr": 0.0917,
+   "method": "model",
+   "tpr": 0.5818
+  },
+  {
+   "fpr": 0.0919,
+   "method": "model",
+   "tpr": 0.5818
+  },
+  {
+   "fpr": 0.0919,
+   "method": "model",
+   "tpr": 0.5821
+  },
+  {
+   "fpr": 0.092,
+   "method": "model",
+   "tpr": 0.5821
+  },
+  {
+   "fpr": 0.0933,
+   "method": "model",
+   "tpr": 0.5844
+  },
+  {
+   "fpr": 0.0933,
+   "method": "model",
+   "tpr": 0.5845
+  },
+  {
+   "fpr": 0.0935,
+   "method": "model",
+   "tpr": 0.5845
+  },
+  {
+   "fpr": 0.0935,
+   "method": "model",
+   "tpr": 0.5846
+  },
+  {
+   "fpr": 0.0936,
+   "method": "model",
+   "tpr": 0.5846
+  },
+  {
+   "fpr": 0.0936,
+   "method": "model",
+   "tpr": 0.5847
+  },
+  {
+   "fpr": 0.0938,
+   "method": "model",
+   "tpr": 0.5847
+  },
+  {
+   "fpr": 0.0938,
+   "method": "model",
+   "tpr": 0.5849
+  },
+  {
+   "fpr": 0.0941,
+   "method": "model",
+   "tpr": 0.5849
+  },
+  {
+   "fpr": 0.0941,
+   "method": "model",
+   "tpr": 0.585
+  },
+  {
+   "fpr": 0.0943,
+   "method": "model",
+   "tpr": 0.585
+  },
+  {
+   "fpr": 0.0943,
+   "method": "model",
+   "tpr": 0.5852
+  },
+  {
+   "fpr": 0.0944,
+   "method": "model",
+   "tpr": 0.5852
+  },
+  {
+   "fpr": 0.0944,
+   "method": "model",
+   "tpr": 0.5853
+  },
+  {
+   "fpr": 0.0946,
+   "method": "model",
+   "tpr": 0.5853
+  },
+  {
+   "fpr": 0.0946,
+   "method": "model",
+   "tpr": 0.5857
+  },
+  {
+   "fpr": 0.0951,
+   "method": "model",
+   "tpr": 0.5857
+  },
+  {
+   "fpr": 0.0951,
+   "method": "model",
+   "tpr": 0.5862
+  },
+  {
+   "fpr": 0.5118,
+   "method": "model",
+   "tpr": 0.7897
+  },
+  {
+   "fpr": 0.512,
+   "method": "model",
+   "tpr": 0.7897
+  },
+  {
+   "fpr": 0.512,
+   "method": "model",
+   "tpr": 0.7898
+  },
+  {
+   "fpr": 0.7721,
+   "method": "model",
+   "tpr": 0.9183
+  },
+  {
+   "fpr": 0.7722,
+   "method": "model",
+   "tpr": 0.9183
+  },
+  {
+   "fpr": 0.774,
+   "method": "model",
+   "tpr": 0.9192
+  },
+  {
+   "fpr": 0.774,
+   "method": "model",
+   "tpr": 0.9193
+  },
+  {
+   "fpr": 0.826,
+   "method": "model",
+   "tpr": 0.9454
+  },
+  {
+   "fpr": 0.8262,
+   "method": "model",
+   "tpr": 0.9454
+  },
+  {
+   "fpr": 0.8262,
+   "method": "model",
+   "tpr": 0.9459
+  },
+  {
+   "fpr": 0.8263,
+   "method": "model",
+   "tpr": 0.9459
+  },
+  {
+   "fpr": 0.8263,
+   "method": "model",
+   "tpr": 0.946
+  },
+  {
+   "fpr": 0.8265,
+   "method": "model",
+   "tpr": 0.946
+  },
+  {
+   "fpr": 0.9169,
+   "method": "model",
+   "tpr": 0.9906
+  },
+  {
+   "fpr": 0.9171,
+   "method": "model",
+   "tpr": 0.9906
+  },
+  {
+   "fpr": 0.9171,
+   "method": "model",
+   "tpr": 0.9908
+  },
+  {
+   "fpr": 0.9173,
+   "method": "model",
+   "tpr": 0.9908
+  },
+  {
+   "fpr": 0.9173,
+   "method": "model",
+   "tpr": 0.9911
+  },
+  {
+   "fpr": 0.9174,
+   "method": "model",
+   "tpr": 0.9911
+  },
+  {
+   "fpr": 0.9174,
+   "method": "model",
+   "tpr": 0.9912
+  },
+  {
+   "fpr": 0.9176,
+   "method": "model",
+   "tpr": 0.9912
+  },
+  {
+   "fpr": 0.9176,
+   "method": "model",
+   "tpr": 0.9914
+  },
+  {
+   "fpr": 0.9179,
+   "method": "model",
+   "tpr": 0.9914
+  },
+  {
+   "fpr": 0.9179,
+   "method": "model",
+   "tpr": 0.9915
+  },
+  {
+   "fpr": 0.9181,
+   "method": "model",
+   "tpr": 0.9915
+  },
+  {
+   "fpr": 0.9385,
+   "method": "model",
+   "tpr": 0.999
+  },
+  {
+   "fpr": 0.9389,
+   "method": "model",
+   "tpr": 0.999
+  },
+  {
+   "fpr": 0.9389,
+   "method": "model",
+   "tpr": 0.9993
+  },
+  {
+   "fpr": 0.939,
+   "method": "model",
+   "tpr": 0.9993
+  },
+  {
+   "fpr": 0.939,
+   "method": "model",
+   "tpr": 0.9994
+  },
+  {
+   "fpr": 0.9392,
+   "method": "model",
+   "tpr": 0.9994
+  },
+  {
+   "fpr": 0.9392,
+   "method": "model",
+   "tpr": 0.9995
+  },
+  {
+   "fpr": 0.9393,
+   "method": "model",
+   "tpr": 0.9995
+  },
+  {
+   "fpr": 1.0,
+   "method": "model",
+   "tpr": 1.0
+  },
+  {
+   "fpr": 0.0,
+   "method": "b2_mode",
+   "tpr": 0.0
+  },
+  {
+   "fpr": 0.0,
+   "method": "b2_mode",
+   "tpr": 0.2646
+  },
+  {
+   "fpr": 0.0923,
+   "method": "b2_mode",
+   "tpr": 0.534
+  },
+  {
+   "fpr": 0.1527,
+   "method": "b2_mode",
+   "tpr": 0.5846
+  },
+  {
+   "fpr": 1.0,
+   "method": "b2_mode",
+   "tpr": 1.0
+  },
+  {
+   "fpr": 0.0,
+   "method": "b5_mode_noon",
+   "tpr": 0.0
+  },
+  {
+   "fpr": 0.0,
+   "method": "b5_mode_noon",
+   "tpr": 0.3153
+  },
+  {
+   "fpr": 0.0467,
+   "method": "b5_mode_noon",
+   "tpr": 0.4511
+  },
+  {
+   "fpr": 0.0923,
+   "method": "b5_mode_noon",
+   "tpr": 0.5846
+  },
+  {
+   "fpr": 0.517,
+   "method": "b5_mode_noon",
+   "tpr": 0.7939
+  },
+  {
+   "fpr": 0.9397,
+   "method": "b5_mode_noon",
+   "tpr": 1.0
+  },
+  {
+   "fpr": 1.0,
+   "method": "b5_mode_noon",
+   "tpr": 1.0
+  }
+ ],
+ "run_key": "20261111T113954030322Z",
+ "schema_version": 1,
+ "selection": [
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f0",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5337,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5373,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5401,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5403,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5448,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5421,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.542,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5493,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f1",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5496,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5009,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": true,
+   "feature_set": "f2",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5005,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.501,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.05,
+   "log_loss_v1": 0.5032,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.505,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5045,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 100
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5062,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 20
+  },
+  {
+   "chosen": false,
+   "feature_set": "f2",
+   "learning_rate": 0.1,
+   "log_loss_v1": 0.5116,
+   "max_leaf_nodes": 31,
+   "min_samples_leaf": 100
+  }
+ ],
+ "source_sha256": "fa6d022ed437155e1a2f0378710602848703c8a7f203f7ff5d77805bf8480aa6",
+ "split": [
+  {
+   "block": "train",
+   "end": "2016-06-30",
+   "label_es": "Entrenamiento",
+   "late_share": 0.574,
+   "orders": 29894,
+   "start": "2015-01-01",
+   "suppressed": false
+  },
+  {
+   "block": "purge_1",
+   "end": "2016-07-07",
+   "label_es": "Purga entre el entrenamiento y la validación",
+   "late_share": 0.549,
+   "orders": 375,
+   "start": "2016-07-01",
+   "suppressed": false
+  },
+  {
+   "block": "valid_v1",
+   "end": "2016-09-30",
+   "label_es": "Validación V1 (elige y calibra)",
+   "late_share": 0.57,
+   "orders": 4649,
+   "start": "2016-07-08",
+   "suppressed": false
+  },
+  {
+   "block": "valid_v2",
+   "end": "2016-12-31",
+   "label_es": "Validación V2 (fija el umbral)",
+   "late_share": 0.577,
+   "orders": 5032,
+   "start": "2016-10-01",
+   "suppressed": false
+  },
+  {
+   "block": "purge_2",
+   "end": "2017-01-07",
+   "label_es": "Purga entre la validación y la prueba",
+   "late_share": 0.544,
+   "orders": 377,
+   "start": "2017-01-01",
+   "suppressed": false
+  },
+  {
+   "block": "test",
+   "end": "2017-09-30",
+   "label_es": "Prueba (se toca una vez)",
+   "late_share": 0.57,
+   "orders": 14527,
+   "start": "2017-01-08",
+   "suppressed": false
+  },
+  {
+   "block": "post_break",
+   "end": "2018-01-31",
+   "label_es": "Tramo posterior al cambio de forma (informativo)",
+   "late_share": 0.576,
+   "orders": 8043,
+   "start": "2017-10-01",
+   "suppressed": false
+  }
+ ],
+ "threshold": {
+  "alert_cost": 5.0,
+  "break_even": 0.5,
+  "chosen_on": "valid_v2",
+  "effect": 0.5,
+  "late_cost": 20.0,
+  "value": 0.66
+ }
+}

@@ -10,6 +10,9 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REAL_CSV = PROJECT_ROOT / "data" / "raw" / "DataCoSupplyChainDataset.csv"
+PROJECT_SEAL = PROJECT_ROOT / "reports" / "model_seal.json"
+# The project's seal as the session found it, read when this file is loaded, before any test runs: only the real run (U25) writes it, so every test leaves it so
+PROJECT_SEAL_AT_START = PROJECT_SEAL.read_bytes() if PROJECT_SEAL.is_file() else None
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -27,6 +30,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 @pytest.fixture(scope="session")
 def project_root() -> Path:
     return PROJECT_ROOT
+
+
+@pytest.fixture
+def project_seal_unchanged() -> Callable[[], bool]:
+    """A check that the project's seal (``reports/model_seal.json``) is what the session found: absent before the real run, the sealed bytes after it."""
+    return lambda: (PROJECT_SEAL.read_bytes() if PROJECT_SEAL.is_file() else None) == PROJECT_SEAL_AT_START
 
 
 @pytest.fixture(scope="session")
