@@ -660,6 +660,45 @@ def test_tasks_of_a_run_whose_delivery_another_run_loaded_are_refused_before_the
     assert run_keys(config) == ["r1", "r2"] and run_row(config, "r2")[0] == "ok"
 
 
+def test_load_of_a_run_that_never_validated_its_delivery_is_refused_before_it_writes(pipeline_closed, fixture_csv, tmp_path, capsys):
+    """Found by the recheck of the corrections: ``task load --run-key r2`` on a run that only delivered loaded M2017-01 into the warehouse and only then failed with a bare
+    ``Errno 2`` on the validation report that ``validate`` had never written. ``load`` is refused until this run's validation passed the delivery."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    run_all(config, only=["fetch_source", "deliver"], run_key="r2")
+    refused_cleanly(config, "r2", ("load",), rf"r2.*{SECOND}.*no se validó", capsys)
+    assert run_keys(config) == ["r1"] and entry(config, SECOND).status != "loaded"
+    run_all(config, start="validate", run_key="r2")   # once validated, the run goes on as always
+    assert run_row(config, "r2")[0] == "ok" and entry(config, SECOND).status == "loaded"
+
+
+def rejected_with_intact_files(config, run_key: str) -> None:
+    """What a rejection of the delivery leaves when its files are intact (a blocking rule such as V20-V22 fails, not the files' SHA-256): the run's validation report with
+    a blocking rule failing, the run ``rejected`` and the delivery ``rejected`` in the manifest, as ``validate`` writes them."""
+    run_all(config, only=["fetch_source", "deliver", "validate"], run_key=run_key)
+    path = config.paths.reports_dir / "validation" / "history" / f"{run_key}.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    blocking = next(r for r in report["results"] if r["rule_id"] == "V22")
+    blocking["status"] = "falla"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    run_state = state(config, run_key)
+    run_state["status"] = "rejected"
+    run_state["tasks"]["validate"] = {"status": "rejected", "rules": ["V22"]}
+    (config.paths.interim_dir / "runs" / f"{run_key}.json").write_text(json.dumps(run_state, indent=2) + "\n", encoding="utf-8")
+    mark_status(config.paths.raw_dir / "deliveries" / "manifest.json", SECOND, "rejected", run_key)
+
+
+def test_load_of_a_rejected_run_is_refused_and_loads_nothing(pipeline_closed, fixture_csv, tmp_path, capsys):
+    """Found by the recheck of the corrections: ``run --run-key r2 --from load`` on a run whose validation rejected its delivery loaded that delivery and closed the run
+    ``ok``, although its validation report says «Rechazado». A rejected delivery is never loaded (RF07, AC11, runbook R3)."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    rejected_with_intact_files(config, "r2")
+    refused_cleanly(config, "r2", ("load",), rf"r2.*rechazó.*{SECOND}", capsys)
+    before = outputs(config)
+    with pytest.raises(pipeline.RunRefusedError, match="rechazó"):
+        run_all(config, start="load", run_key="r2")
+    assert outputs(config) == before and run_keys(config) == ["r1"] and entry(config, SECOND).status == "rejected"
+
+
 def test_closing_a_run_never_creates_its_row_in_the_warehouse(pipeline_two_runs, fixture_csv, tmp_path):
     """``_close_sqlite`` wrote the run's row with an upsert, so a run with no row (it never loaded) got one, with no delivery, that the next close step crashed on."""
     config = relocate(pipeline_two_runs, tmp_path / "p", fixture_csv)

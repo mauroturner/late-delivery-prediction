@@ -485,7 +485,7 @@ def load(ctx: RunContext) -> dict:
             logger.info("run %s: %s is already in the warehouse; recording the run only", ctx.run_key, spec.delivery_id)
         else:
             controls = len(load_delivery(conn, frames, spec, ctx.run_key, cfg, sha256_json=entry.sha256_json).checks)
-        report = read_report(_validation_dir(cfg) / "history" / f"{ctx.run_key}.json")
+        report = read_report(_validation_report_path(cfg, ctx.run_key))
         record_run(conn, {
             "run_key": ctx.run_key, "started_at": ctx.started_at.isoformat(timespec="seconds"), "finished_at": None, "status": "running",
             "delivery_id": spec.delivery_id, "as_of_date": spec.as_of.isoformat(), "source_sha256": fetched["sha256"],
@@ -837,6 +837,38 @@ def _refuse_a_delivery_this_run_did_not_load(spec: TaskSpec, ctx: RunContext) ->
     )
 
 
+def _validation_report_path(cfg: PipelineConfig, run_key: str) -> Path:
+    """This run's validation report, the copy ``validate`` keeps in ``history/`` (``latest.json`` is the last run's)."""
+    return _validation_dir(cfg) / "history" / f"{run_key}.json"
+
+
+def _refuse_a_load_its_validation_did_not_pass(spec: TaskSpec, ctx: RunContext) -> None:
+    """``load`` writes a delivery only after this run's ``validate`` passed it (RF07, AC11; found by the recheck of the corrections of the evaluation of ``eef9bea``).
+
+    ``task load --run-key <a run that only delivered>`` loaded the delivery and only then failed on the validation report that ``validate`` had never written, and
+    ``run --run-key <a rejected run> --from load`` loaded a delivery its own validation had rejected and closed the run ``ok``. ``load`` is refused unless this run's
+    validation report exists and no blocking rule fails in it. The refusal comes before anything is written.
+    """
+    if spec.task_id != "load":
+        return
+    held = _read_state(ctx.state_path).get("tasks", {}).get("deliver", {})
+    if not held.get("delivered"):
+        return  # no delivery in this run: the task has its own error for that
+    path = _validation_report_path(ctx.cfg, ctx.run_key)
+    if not path.is_file():
+        raise RunRefusedError(
+            f"La corrida {ctx.run_key} tiene la entrega {held['delivery_id']}, pero no se validó: la tarea load carga solo una entrega que la validación de su corrida "
+            f"aprobó. Valide y cargue la entrega (python -m latedel run --run-key {ctx.run_key} --from validate)"
+        )
+    report = read_report(path)
+    if report.blocking_failed:
+        failing = ", ".join(r.rule_id for r in report.results if not r.passed and r.severity.value == "blocking")
+        raise RunRefusedError(
+            f"La validación de la corrida {ctx.run_key} rechazó la entrega {held['delivery_id']} ({failing}): la tarea load no carga una entrega rechazada. "
+            f"El motivo está en {path}; cuando se corrija la causa, la entrega se vuelve a intentar completa (runbook R3)"
+        )
+
+
 def _record_failure(ctx: RunContext, spec: TaskSpec, error: BaseException) -> None:
     """Record a failed task: the state file, the row of SQLite and the files already exported.
 
@@ -867,7 +899,8 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
     """Run one task after the refusals and save its result; a failure of the task or of the save of its result is recorded (D72, D79).
 
     The refusals come first and write nothing: a closed run (``ok`` or ``no_delivery``: a run that ended without a delivery is closed, so no task runs after it), a
-    second delivery, a model task of an older date, and ``load`` or a later task on a delivery this run did not load. ``except BaseException`` is on purpose: an
+    second delivery, a model task of an older date, ``load`` or a later task on a delivery this run did not load, and ``load`` of a delivery this run's validation did not
+    pass. ``except BaseException`` is on purpose: an
     interruption (Ctrl+C, a scheduler that stops the process with an exception) leaves the run unfinished, so it is recorded as ``failed`` like any failure, which keeps
     it open for a resume, and the interruption is raised again.
     """
@@ -875,6 +908,7 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
     _refuse_a_second_delivery(spec, ctx)
     _refuse_an_older_date(spec, ctx)
     _refuse_a_delivery_this_run_did_not_load(spec, ctx)
+    _refuse_a_load_its_validation_did_not_pass(spec, ctx)
     started = time.perf_counter()
     logger.info("task %s start (run %s)", spec.task_id, ctx.run_key)
     _reopen(ctx)
