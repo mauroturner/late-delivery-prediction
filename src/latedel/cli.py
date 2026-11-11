@@ -1,8 +1,8 @@
 """Command line of the pipeline: ``python -m latedel <command>`` (plan section 19, decisions D35 and D73).
 
 ``run`` and ``replay`` walk the same ``pipeline.TASKS`` as the Airflow DAG, in the same order and with the same functions, so Windows can run the whole flow without Airflow.
-Exit codes: 0 ok (also a run with no delivery left), 1 a task failed, 2 wrong usage or configuration (also a task refused because its run is closed), 3 the delivery or the
-source was rejected by the validation (the warehouse and the exports are as they were). An option that cannot be honoured is refused before anything is written; none is
+Exit codes: 0 ok (also a run with no delivery left), 1 a task failed, 2 wrong usage or configuration (also a task refused because its run is closed, or because another
+process holds the writer lock of the data folder, D82), 3 the delivery or the source was rejected by the validation (the warehouse and the exports are as they were). An option that cannot be honoured is refused before anything is written; none is
 ignored in silence (AC29). Every relative path of ``--config`` and of ``make-fixture`` is resolved against the project folder, never against the working directory.
 """
 
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValidationError as error:
         _fail(f"rechazada: {error}")
         return EXIT_REJECTED
-    except (FileNotFoundError, UsageError, RunRefusedError) as error:   # refused before anything ran or was written
+    except (FileNotFoundError, UsageError, RunRefusedError) as error:   # refused before anything ran or was written (a closed run, a data folder another process holds)
         _fail(f"error: {error}")
         return EXIT_USAGE
     except Exception as error:   # a task failed: its record is in the state of the run

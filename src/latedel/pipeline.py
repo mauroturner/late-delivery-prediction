@@ -12,6 +12,9 @@ Three rules keep the records honest (they come from the evaluations of projects 
   the close from any step. A task that fails after the load marks the run ``failed`` in SQLite and rewrites the files that exist.
 * A run that ended is not opened again, and a task whose delivery is not the last one loaded is refused before it writes anything (AC28). The refusals come first and write
   nothing.
+
+And one process writes a data folder at a time (review of H8): ``run_task``, ``run_all`` and ``replay`` take the writer lock of the interim folder before their first
+write and keep it until they return, and a second process is refused before it writes anything (``RunLockedError``, decision D82; ``latedel.lock``).
 """
 
 from __future__ import annotations
@@ -23,7 +26,8 @@ import re
 import sqlite3
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -53,6 +57,7 @@ from latedel.files import write_atomic
 from latedel.ingest import load_source_report, read_interim
 from latedel.launch import fit_model as fit_frozen_model
 from latedel.launch import load_registered_model, m05_result
+from latedel.lock import LockHeld, acquire, release
 from latedel.reporting import load_summary, write_summary
 from latedel.schema import SourceError
 from latedel.scoring import RunMeta, score_new_orders
@@ -95,6 +100,10 @@ class RunStateError(RuntimeError):
 
 class RunRefusedError(RunStateError):
     """A task was refused before it started, because the run is not in a state that can take it: nothing was written (the CLI exits with 2)."""
+
+
+class RunLockedError(RunRefusedError):
+    """Another process holds the writer lock of the data folder (or a lock nobody can read is there): the task was refused before it wrote anything (decision D82)."""
 
 
 class ExportError(RuntimeError):
@@ -149,6 +158,20 @@ def _read_state(path: Path) -> dict:
 
 def _write_state(path: Path, state: dict) -> None:
     write_atomic(path, json.dumps(state, indent=2, ensure_ascii=False, default=str) + "\n")
+
+
+@contextmanager
+def _sole_writer(cfg: PipelineConfig, *, command: str, run_key: str | None) -> Iterator[None]:
+    """Hold the writer lock of the data folder while the caller runs (decision D82). It is taken before the state file of the run exists, so a refusal writes nothing;
+    it is given back however the caller ends (a failure, a rejection, an interruption), and only a process killed outright leaves it, for a person to check (runbook R9)."""
+    try:
+        held = acquire(cfg.paths.interim_dir, command=command, run_key=run_key)
+    except LockHeld as error:
+        raise RunLockedError(str(error)) from None
+    try:
+        yield
+    finally:
+        release(held)
 
 
 def _context(cfg: PipelineConfig, run_id: str | None, now: datetime | None) -> RunContext:
@@ -853,9 +876,13 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
 
 
 def run_task(task_id: str, run_id: str | None = None, cfg: PipelineConfig | None = None, *, now: datetime | None = None) -> dict:
-    """Run one task of the run `run_id` (a new run if none) and return what it produced: what the Airflow DAG calls."""
+    """Run one task of the run `run_id` (a new run if none) and return what it produced: what the Airflow DAG calls. The task holds the writer lock of the data folder
+    while it runs (D82)."""
     spec = _spec(task_id)
-    return _run_spec(spec, _context(cfg or load_config(), run_id, now))
+    cfg = cfg or load_config()
+    when = (now or datetime.now(UTC)).astimezone(UTC)
+    with _sole_writer(cfg, command=f"task {task_id}", run_key=make_run_key(run_id if run_id is not None else when)):
+        return _run_spec(spec, _context(cfg, run_id, when))
 
 
 def _select(only: list[str] | None, start: str | None) -> list[str]:
@@ -882,20 +909,22 @@ def run_all(
     """Run the tasks in order: all, only the listed ones, or from `start` on; stops after a run with no delivery.
 
     Returns one ``{"task", "result"}`` per task that ran; `on_task` is called with each one as it ends, so a caller can show progress even if a later task fails.
-    ``ValidationError`` is not caught: the run was rejected.
+    ``ValidationError`` is not caught: the run was rejected. The writer lock of the data folder is held from before the first task to after the last (D82).
     """
     ids = _select(only, start)
-    ctx = _context(cfg, run_key, now)
+    when = (now or datetime.now(UTC)).astimezone(UTC)
     outcome = []
-    for task_id in ids:
-        spec = _spec(task_id)
-        result = _run_spec(spec, ctx)
-        outcome.append({"task": task_id, "result": result})
-        if on_task is not None:
-            on_task(task_id, result)
-        if spec.short_circuit and not result.get("delivered", True):
-            logger.info("run %s ends after %s: there is no delivery", ctx.run_key, task_id)
-            break
+    with _sole_writer(cfg, command="run", run_key=make_run_key(run_key if run_key is not None else when)):
+        ctx = _context(cfg, run_key, when)
+        for task_id in ids:
+            spec = _spec(task_id)
+            result = _run_spec(spec, ctx)
+            outcome.append({"task": task_id, "result": result})
+            if on_task is not None:
+                on_task(task_id, result)
+            if spec.short_circuit and not result.get("delivered", True):
+                logger.info("run %s ends after %s: there is no delivery", ctx.run_key, task_id)
+                break
     return outcome
 
 
@@ -920,14 +949,16 @@ def replay(cfg: PipelineConfig, until: str | None = None, *, on_task: Callable[[
     """Run the pending deliveries one run after another, until none is left or the delivery `until` (its id, for example ``M2017-03``) has been run.
 
     Each run is a complete run of the next pending delivery; the outcomes come back one list per run. With nothing pending, nothing runs and nothing is recorded (a run that
-    finds no delivery is ``run_all``'s, not this loop's). A failure or a rejection stops the replay.
+    finds no delivery is ``run_all``'s, not this loop's). A failure or a rejection stops the replay. One writer lock is held for the whole replay: no other process
+    writes between two of its runs (D82).
     """
     plan = delivery_plan(cfg.deliveries)
     last = _last_index(cfg, until, plan)
     runs: list[list[dict]] = []
-    while (pending := next_pending(_manifest_path(cfg), plan)) is not None and plan.index(pending) <= last:
-        runs.append(run_all(cfg, on_task=on_task))
-        again = next_pending(_manifest_path(cfg), plan)
-        if again == pending:
-            raise RunStateError(f"La corrida de {pending.delivery_id} terminó sin cargar la entrega: el replay se detiene en vez de repetirla")
+    with _sole_writer(cfg, command="replay", run_key=None):
+        while (pending := next_pending(_manifest_path(cfg), plan)) is not None and plan.index(pending) <= last:
+            runs.append(run_all(cfg, on_task=on_task))
+            again = next_pending(_manifest_path(cfg), plan)
+            if again == pending:
+                raise RunStateError(f"La corrida de {pending.delivery_id} terminó sin cargar la entrega: el replay se detiene en vez de repetirla")
     return runs

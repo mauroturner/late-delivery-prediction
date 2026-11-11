@@ -1,5 +1,6 @@
 """H7: the advisories of the native review of U21 (the tasks, the state of a run and its close): a failure of the write that records a task's result, the retry and
-timeout fields that only Airflow enforces, a refusal that could not be reached, the usage errors and the stops of ``replay``, and a real interruption.
+timeout fields that only Airflow enforces, a refusal that could not be reached, the usage errors and the stops of ``replay``, and a real interruption. H9 adds the
+advisories of the review of H8 that concern the pipeline: one writer at a time on a data folder, with a second process refused and a lock left by a killed process.
 
 Every claim was checked against the code first; the ones that were defects have a test that failed before the change, the ones that were only missing tests pass. The
 runs are copies of the ones ``conftest.py`` builds once per session.
@@ -9,20 +10,30 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
+import socket
 import sqlite3
+import subprocess
+import sys
+from contextlib import contextmanager
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from latedel import pipeline
+from latedel.cli import main as cli_main
 from latedel.deliveries import read_manifest
-from latedel.pipeline import RunStateError, UsageError, replay, run_all, run_task
+from latedel.lock import LOCK_NAME, read_holder
+from latedel.pipeline import RunLockedError, RunRefusedError, RunStateError, UsageError, replay, run_all, run_task
 from latedel.validate import ValidationError
 from tests.conftest import relocate
 from tests.fixtures.helpers import snapshot
 
 FIRST, SECOND, THIRD = "L2017-01-07", "M2017-01", "M2017-02"
+PROJECT = Path(__file__).resolve().parents[2]
 
 
 def state(config, run_key: str) -> dict:
@@ -242,3 +253,118 @@ def test_a_real_keyboard_interrupt_in_a_task_is_recorded_as_a_failure_and_still_
     monkeypatch.undo()
     run_all(config, start="evaluate", run_key="r2")
     assert state(config, "r2")["status"] == "ok" and run_row(config, "r2")[0] == "ok"
+
+
+# --- H9: one writer at a time on a data folder (review of H8, R1-001 and R4-001; decision D82) ---------------------------------------------------------
+
+HOLDER = (
+    "import os, sys\n"
+    "from latedel.lock import acquire, release\n"
+    "held = acquire(sys.argv[1], command='replay', run_key='other-run')\n"
+    "print('held', os.getpid(), flush=True)\n"
+    "sys.stdin.readline()\n"
+    "release(held)\n"
+)
+
+
+@contextmanager
+def another_process_holding(folder: Path):
+    """A second process that takes the writer lock of `folder` and keeps it until the block ends (what ``airflow dags test`` next to the scheduler is); yields the
+    process and the id of the interpreter that holds the lock (on Windows the ``python.exe`` of a virtual environment starts the interpreter as a child of its own, so
+    the two ids differ). A block that kills that interpreter leaves the lock behind, as a killed process does."""
+    env = {**os.environ, "PYTHONPATH": str(PROJECT / "src")}
+    child = subprocess.Popen([sys.executable, "-c", HOLDER, str(folder)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+    try:
+        word, pid = child.stdout.readline().split()
+        assert word == "held"
+        yield child, int(pid)
+    finally:
+        if child.poll() is None:
+            child.stdin.write("\n")
+            child.stdin.flush()
+        child.wait(timeout=60)
+        child.stdin.close()
+        child.stdout.close()
+
+
+def test_a_second_writer_is_refused_before_it_writes_anything_while_another_process_holds_the_data_folder(pipeline_closed, fixture_csv, tmp_path, capsys):
+    """R1-001 and R4-001: ``airflow dags test`` in the debug service, next to a scheduler that runs the monthly run, made two writers of the same warehouse, and only a
+    comment warned about it. Every task now takes the writer lock of the data folder before its first write: a task of any run, from another process, is refused while
+    the lock is held, names the holder and writes nothing (not even the state file of its run). When the holder ends, the next process takes the folder."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    config_file = tmp_path / "p" / "config" / "test.toml"
+    with another_process_holding(config.paths.interim_dir) as (_child, pid):
+        before = snapshot(tmp_path / "p")
+        with pytest.raises(RunLockedError) as refused:
+            run_task("fetch_source", None, config)
+        message = str(refused.value)
+        assert isinstance(refused.value, RunRefusedError)   # the command line exits with 2 and the DAG fails the task without retrying it
+        assert "Otro proceso escribe esta carpeta de datos" in message and f"proceso {pid} " in message and "other-run" in message and "`replay`" in message
+        for argv in (["run"], ["replay"], ["task", "deliver", "--run-key", "r2"]):
+            code = cli_main([*argv, "--config", str(config_file)])
+            err = capsys.readouterr().err
+            assert code == 2 and "Otro proceso escribe esta carpeta de datos" in err and "falló" not in err, argv
+        assert snapshot(tmp_path / "p") == before   # no state file, no delivery, nothing in the warehouse or the exports; the lock is still the other process's
+    assert not (config.paths.interim_dir / LOCK_NAME).exists()   # its holder released it when it ended
+    assert cli_main(["task", "report", "--config", str(config_file), "--run-key", "r1"]) == 2
+    assert "cerrada" in capsys.readouterr().err   # the next process takes the folder: the refusal is the closed run's, as before
+
+
+def test_a_lock_left_by_a_killed_process_is_reported_and_never_removed_by_another_run(pipeline_closed, fixture_csv, tmp_path):
+    """A process killed while it holds the lock (``kill -9``, the power going off) cannot release it. The next run says the holder is no longer running, names it and
+    says what to do, and does not remove the lock itself: only a person can tell that nothing else writes the folder (a container and its host share it). Once the
+    person removes it, the folder is free."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    lock = config.paths.interim_dir / LOCK_NAME
+    with another_process_holding(config.paths.interim_dir) as (child, pid):
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))   # on Windows this is TerminateProcess: no handler of the holder runs, as with kill -9
+        child.wait(timeout=60)
+        left = lock.read_bytes()
+        before = snapshot(tmp_path / "p")
+        with pytest.raises(RunLockedError) as refused:
+            run_task("fetch_source", None, config)
+        message = str(refused.value)
+        assert "ya no está en marcha" in message and f"proceso {pid} " in message and "other-run" in message and "docs/runbook.md" in message
+        assert lock.read_bytes() == left and snapshot(tmp_path / "p") == before
+    lock.unlink()   # what the runbook says to do once nothing else writes the folder
+    with pytest.raises(RunRefusedError, match="cerrada"):
+        run_task("report", "r1", config)
+    assert not lock.exists()
+
+
+def test_a_task_holds_the_lock_while_it_runs_and_releases_it_when_it_fails_or_ends(pipeline_rendered, fixture_csv, tmp_path, monkeypatch):
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)
+    lock = config.paths.interim_dir / LOCK_NAME
+    seen = []
+    real = pipeline._CLOSERS["html"]
+
+    def boom(ctx):
+        raise RuntimeError("boom in the close")
+
+    def probe(ctx):
+        seen.append(read_holder(config.paths.interim_dir))
+        return real(ctx)
+
+    monkeypatch.setitem(pipeline._CLOSERS, "html", boom)
+    with pytest.raises(RuntimeError, match="boom in the close"):
+        run_all(config, start="report", run_key="r1")
+    assert not lock.exists() and state(config, "r1")["status"] == "failed"
+    monkeypatch.setitem(pipeline._CLOSERS, "html", probe)
+    run_all(config, start="report", run_key="r1")
+    [holder] = seen
+    assert (holder["pid"], holder["host"], holder["command"], holder["run_key"]) == (os.getpid(), socket.gethostname(), "run", "r1")
+    assert not lock.exists() and state(config, "r1")["status"] == "ok"
+
+
+@pytest.mark.parametrize(("argv", "needle"), [
+    (["task", "report", "--run-key", "r1"], "cerrada"),
+    (["run", "--run-key", "r1", "--from", "report"], "cerrada"),
+    (["replay", "--until", FIRST], "anterior a la siguiente entrega pendiente"),
+])
+def test_each_command_that_takes_the_lock_ends_as_before_and_leaves_the_folder_free(pipeline_closed, fixture_csv, tmp_path, capsys, argv, needle):
+    """The commands the lock touches (``task``, ``run``, ``replay``) give what they gave before, with nothing written and no lock left behind."""
+    relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    before = snapshot(tmp_path / "p")
+    assert cli_main([*argv, "--config", str(tmp_path / "p" / "config" / "test.toml")]) == 2
+    assert needle in capsys.readouterr().err
+    assert snapshot(tmp_path / "p") == before and not (tmp_path / "p" / "interim" / LOCK_NAME).exists()

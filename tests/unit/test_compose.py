@@ -228,11 +228,30 @@ def test_a_failed_migration_makes_the_init_exit_non_zero(compose, tmp_path):
 # --- H8: the advisories of the review of U23 -----------------------------------------------------------------------------------------------------------
 
 
-def service_block(compose: str, name: str) -> str:
-    """The text of one service of the compose file, comments included, up to the next service (or the end of ``services``)."""
-    found = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z#]|^\S)", compose, flags=re.MULTILINE | re.DOTALL)
-    assert found, name
-    return found.group(1)
+def service_block(compose: str, name: str) -> tuple[str, str]:
+    """One service of the compose file: the comment over its key (the lines of ``  #`` right above it, joined without the ``#``) and its own text, up to the next
+    service, the comment over the next service or the end of ``services`` (review of H8, R3-001 and R3-002: the test of the debug service reads its comment through this,
+    not through a count of lines)."""
+    lines = compose.splitlines()
+    [start] = [i for i, line in enumerate(lines) if line == f"  {name}:"]
+    top = start
+    while top > 0 and lines[top - 1].startswith("  #"):
+        top -= 1
+    end = start + 1
+    while end < len(lines) and not re.match(r"  [A-Za-z#]|\S", lines[end]):
+        end += 1
+    comment = " ".join(line.strip().lstrip("#").strip() for line in lines[top:start])
+    return comment, "\n".join(lines[start + 1 : end])
+
+
+def test_the_service_helper_reads_one_service_and_only_the_comment_over_it(compose):
+    """R3-001: the helper is used, and it scopes: the comment over the debug service is that service's alone, and the text of a service stops at the next one."""
+    debug_comment, debug_body = service_block(compose, "airflow-cli")
+    init_comment, init_body = service_block(compose, "airflow-init")
+    assert "dags test" in debug_comment and "dags test" not in init_comment and "dags test" not in init_body
+    assert re.search(r"^    profiles:\n      - debug$", debug_body, flags=re.MULTILINE) and "profiles:" not in init_body
+    assert "set -euo pipefail" in init_body and "set -euo pipefail" not in debug_body
+    assert service_block(compose, "airflow-scheduler")[0] == ""   # no comment over it: nothing of the debug service leaks into another service
 
 
 def test_the_plugins_are_read_only_and_only_what_airflow_writes_is_writable(compose):
@@ -250,10 +269,10 @@ def test_the_plugins_are_read_only_and_only_what_airflow_writes_is_writable(comp
 def test_the_debug_service_says_it_runs_outside_the_guard_of_one_active_run(compose):
     """R4-airflow-cli-sqlite-writer-bypass: ``airflow dags test`` in the debug service runs outside the scheduler and its ``max_active_runs=1``, so next to a running
     scheduler there would be two writers of the SQLite warehouse. Its ``../data`` stays writable (``dags test`` writes the warehouse, and the Docker test runs it); the
-    comment over the service says to stop the scheduler first."""
-    text = compose[compose.index("  # `docker compose --profile debug"):]
-    comment = " ".join(line.strip().lstrip("#").strip() for line in text.splitlines()[:8] if line.strip().startswith("#"))
-    for needle in ("max_active_runs", "SQLite", "docker compose stop airflow-scheduler", "runbook"):
+    comment over the service says to stop the scheduler first, and since H9 that a task of either is refused while the other holds the writer lock of ``../data``
+    (decision D82), which does not cover the time between two tasks of the scheduler's run (review of H8: the comment is read through ``service_block``)."""
+    comment, _body = service_block(compose, "airflow-cli")
+    for needle in ("max_active_runs", "SQLite", "docker compose stop airflow-scheduler", "runbook", "pipeline.lock", "between two tasks"):
         assert needle in comment, needle
 
 

@@ -171,9 +171,11 @@ services:
 
   # `docker compose --profile debug run --rm airflow-cli airflow dags test latedel_monthly`
   # `airflow dags test` runs the DAG in this container, outside the scheduler and so outside its max_active_runs=1 and max_active_tasks=1:
-  # next to a scheduler that is running the monthly run there would be two writers of the SQLite warehouse in ../data. Run it with the
-  # scheduler stopped (`docker compose stop airflow-scheduler`, and `docker compose start airflow-scheduler` after); ../data stays writable
-  # here because `dags test` writes the warehouse (runbook R8, decision D80).
+  # next to a scheduler that is running the monthly run there would be two writers of the SQLite warehouse in ../data. Every task holds the
+  # writer lock ../data/interim/pipeline.lock while it runs, so a task of one is refused while a task of the other is running (decision D82),
+  # but between two tasks of the scheduler's run nobody holds it. Run it with the scheduler stopped (`docker compose stop airflow-scheduler`,
+  # and `docker compose start airflow-scheduler` after); ../data stays writable here because `dags test` writes the warehouse (runbook R8 and
+  # R9, decisions D80 and D82).
   airflow-cli:
     <<: *airflow-common
     profiles:

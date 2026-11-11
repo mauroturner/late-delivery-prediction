@@ -4,7 +4,9 @@ The DAG only wires: each task calls ``latedel.pipeline.run_task(task_id, run_id)
 same work in the same order. The task whose ``TaskSpec`` has ``short_circuit=True``, ``deliver``, is an ``@task.short_circuit``: with no delivery left to load the pipeline
 records the run as ``no_delivery`` in ``pipeline_runs`` and in its state file, the task returns False and Airflow skips the rest. It runs once a month, on the 2nd (the
 delivery of the month before is ready), with one active run and one active task at a time, because the warehouse is a SQLite file with a single writer
-(``airflow dags test`` in the debug service of the compose file runs outside that guard: the compose file says how to run it).
+(``airflow dags test`` in the debug service of the compose file runs outside that guard: the compose file says how to run it). Each task also holds the pipeline's
+writer lock of the data folder while it runs, and a task that finds it held by another process is refused (``RunLockedError``, a ``RunRefusedError``) and fails without
+retries (decision D82).
 """
 
 from __future__ import annotations

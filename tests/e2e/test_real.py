@@ -36,7 +36,8 @@ COSTS = {"alert_cost": 5.0, "late_cost": 20.0, "effect": 0.5}   # D14: the defau
 SEALED_CRITERIA = tuple(f"C{i:02d}" for i in range(1, 10))      # C10 is informative and not sealed
 CRITERION_FIELDS = ("value", "baseline_value", "ci_low", "ci_high")
 SEALED_METHODS = ("model", "b2_mode", "b5_mode_noon")
-# RNF02 and RNF03, on this machine
+# RNF02 and RNF03, the limits the requirements set on this machine. Nothing is timed or measured here: the test compares them with the times and peaks the sealed run
+# recorded (dim_pipeline_run.parquet and the state file of each run), so it gives the same verdict on any machine (review of U25, R3-hardcoded-thresholds; D83)
 MAX_REPLAY_SECONDS, MAX_LAUNCH_SECONDS, MAX_MONTHLY_SECONDS = 600, 180, 60
 MAX_WORKING_SET_MB = 1.5 * 1024                   # 1.5 GB, in the megabytes of sysinfo (1 MB = 1,048,576 bytes)
 
