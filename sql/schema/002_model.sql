@@ -165,3 +165,22 @@ CREATE TABLE IF NOT EXISTS feature_importance (
     auc_drop            REAL NOT NULL,
     sort_order          INTEGER NOT NULL
 );
+
+-- The monthly follow-up of the alerts (U16, docs/plan.md section 15): for a calculation date, one row per month of the order and shipping mode with what the frozen
+-- model scored and what became of its alerts once the outcomes were known. Rows of a date are replaced when that date is computed again; other dates are not touched.
+CREATE TABLE IF NOT EXISTS tracking_monthly (
+    as_of_date          TEXT NOT NULL,
+    order_month         TEXT NOT NULL,   -- YYYY-MM of the order
+    shipping_mode       TEXT NOT NULL,
+    orders_scored       INTEGER NOT NULL,
+    alerts              INTEGER NOT NULL,
+    closed_orders       INTEGER NOT NULL,   -- scored orders whose outcome is known and is not a cancellation
+    closed_alerts       INTEGER NOT NULL,
+    alerts_late         INTEGER NOT NULL,   -- closed alerts that arrived late
+    late_closed         INTEGER NOT NULL,   -- closed orders that arrived late
+    late_missed         INTEGER NOT NULL,   -- closed late orders that had no alert
+    late_expected       REAL NOT NULL,      -- sum of the risk of the closed orders: the delays the model expected
+    cancelled_orders    INTEGER NOT NULL,
+    alerts_on_cancelled INTEGER NOT NULL,   -- I04
+    PRIMARY KEY (as_of_date, order_month, shipping_mode)
+);
