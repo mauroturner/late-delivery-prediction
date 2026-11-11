@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS baseline_rates (
 );
 
 -- One score per new order, never changed: insert-only. Three triggers abort an update, a delete and an insert of an order that is already scored; the third exists
--- because INSERT OR REPLACE and REPLACE delete the old row without running the delete trigger while recursive_triggers is off (project 02, its D44).
+-- because INSERT OR REPLACE and REPLACE delete the old row without running the delete trigger while recursive_triggers is off (project 02, its D44). The protection does not
+-- depend on that setting: the third trigger fires before the insert is resolved, and a test runs every rewrite with the setting on and off (H3, decision D61).
 CREATE TABLE IF NOT EXISTS model_scores (
     order_id            INTEGER PRIMARY KEY,
     as_of_date          TEXT NOT NULL,

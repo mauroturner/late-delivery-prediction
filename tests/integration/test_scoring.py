@@ -35,17 +35,6 @@ def score(conn, registered, spec, *, run_key=None, threshold=None):
     return score_new_orders(conn, spec.delivery_id, registered.model, registered.threshold if threshold is None else threshold, meta)
 
 
-@pytest.fixture()
-def monthly(fitted_launch, delivered, tmp_path):
-    """A copy of the warehouse after the launch, with its registered model, ready to receive the monthly deliveries."""
-    db = tmp_path / "w.sqlite"
-    shutil.copyfile(fitted_launch.db, db)
-    conn = connect(db)
-    folder, plan, entries = delivered
-    yield conn, load_registered_model(conn, fitted_launch.cfg), fitted_launch.cfg, folder, plan, entries
-    conn.close()
-
-
 def test_scores_never_change_in_later_runs(monthly):
     conn, registered, cfg, folder, plan, entries = monthly
     january = load_next(conn, folder, plan, entries, cfg, 1)

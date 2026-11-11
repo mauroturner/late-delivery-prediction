@@ -199,8 +199,12 @@ def test_the_selection_and_calibration_of_a_date_do_not_depend_on_later_data(lau
     pd.testing.assert_frame_equal(a.valid_v2, b.valid_v2, check_exact=True)              # the calibrated risks of V2: model and calibrator
     probe = matrices(launch_pair.clean)[a.model.feature_set].loc[a.valid_v2["order_id"]]
     np.testing.assert_array_equal(predict_risk(a.model, probe), predict_risk(b.model, probe))
-    np.testing.assert_array_equal(a.model.calibrated.calibrated_classifiers_[0].calibrators[0].X_thresholds_, b.model.calibrated.calibrated_classifiers_[0].calibrators[0].X_thresholds_)
-    np.testing.assert_array_equal(a.model.calibrated.calibrated_classifiers_[0].calibrators[0].y_thresholds_, b.model.calibrated.calibrated_classifiers_[0].calibrators[0].y_thresholds_)
+    # the calibrator is the same function, seen only through the public prediction: on every order of the warehouse as it was at the launch (the training block, V1 and V2),
+    # a fixed grid that no later data touches, the two models give the same probability (R3-002: no private attribute of scikit-learn)
+    grid = matrices(launch_pair.clean)[a.model.feature_set]
+    assert len(grid) > 1000 and len(grid) > len(probe) * 4
+    np.testing.assert_array_equal(predict_risk(a.model, grid), predict_risk(b.model, grid))
+    assert len(np.unique(predict_risk(a.model, grid))) >= 3, "the grid reaches several steps of the calibrator, so the equality is not trivial"
 
 
 def test_the_threshold_and_the_sensitivity_of_a_date_do_not_depend_on_later_data(launch_pair):

@@ -87,6 +87,7 @@ def test_the_registry_is_insert_only(fitted_launch, tmp_path):
     attempts = (
         "UPDATE model_registry SET threshold = 0.1", "DELETE FROM model_registry",
         "INSERT OR REPLACE INTO model_registry SELECT * FROM model_registry", "REPLACE INTO model_registry SELECT * FROM model_registry", "INSERT INTO model_registry SELECT * FROM model_registry",
+        "INSERT OR IGNORE INTO model_registry SELECT * FROM model_registry",          # R3-registry-insert-ignore-gap: the same case the scores already had
     )
     for statement in attempts:
         with pytest.raises(sqlite3.IntegrityError, match="insert-only"):

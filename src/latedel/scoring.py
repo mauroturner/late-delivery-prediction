@@ -63,7 +63,7 @@ def score_new_orders(conn: sqlite3.Connection, delivery_id: str, model: RiskMode
     The delivery must be loaded and the staging tables built for ``run_meta.as_of`` (``warehouse.load_delivery`` and ``warehouse.rebuild_at`` do it). A delivery
     without orders (the launch is not scored, the close has none) gives an empty result.
     """
-    if not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:       # a bool is an int in Python: True is not the threshold 1.0
         raise ScoreError(f"el umbral debe ser un número entre 0 y 1, se recibió {threshold!r}")
     apply_schema(conn)
     ids = [r[0] for r in conn.execute("SELECT order_id FROM raw_orders WHERE delivery_id = ? ORDER BY order_id", (delivery_id,))]
@@ -72,7 +72,7 @@ def score_new_orders(conn: sqlite3.Connection, delivery_id: str, model: RiskMode
     if not todo:
         return ScoreResult(delivery_id, 0, len(done), 0, float(threshold), run_meta.model_version, run_meta.as_of)
 
-    orders, lines = read_order_frames(conn)
+    orders, lines = read_order_frames(conn, delivery_id)         # only this delivery's orders and lines, not everything accumulated
     orders = orders[orders["order_id"].isin(todo)]
     if len(orders) != len(todo):
         raise ScoreError(f"{len(todo) - len(orders)} pedidos de la entrega {delivery_id} no están en las etapas de {run_meta.as_of}: se reconstruyen con rebuild_at antes de puntuar")
@@ -87,6 +87,10 @@ def score_new_orders(conn: sqlite3.Connection, delivery_id: str, model: RiskMode
     ]
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # the orders are looked at again inside the transaction that inserts: a call that overlapped this one and committed first has scored some of them, and those scores
+        # are its own and stay as they are; this call inserts the rest instead of losing its whole batch to the insert-only trigger (H3)
+        meanwhile = _scored_among(conn, todo)
+        rows = [r for r in rows if r[0] not in meanwhile]
         conn.executemany("INSERT INTO model_scores (order_id, as_of_date, run_key, model_version, risk, threshold, is_alert) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
         conn.execute("COMMIT")
     except BaseException:
@@ -94,5 +98,6 @@ def score_new_orders(conn: sqlite3.Connection, delivery_id: str, model: RiskMode
             conn.execute("ROLLBACK")
         raise
     alerts = sum(r[6] for r in rows)
-    logger.info("score %s: delivery=%s scored=%d already=%d alerts=%d threshold=%s", run_meta.run_key, delivery_id, len(rows), len(done), alerts, threshold)
-    return ScoreResult(delivery_id, len(rows), len(done), alerts, float(threshold), run_meta.model_version, run_meta.as_of)
+    already = len(done) + len(meanwhile)
+    logger.info("score %s: delivery=%s scored=%d already=%d alerts=%d threshold=%s", run_meta.run_key, delivery_id, len(rows), already, alerts, threshold)
+    return ScoreResult(delivery_id, len(rows), already, alerts, float(threshold), run_meta.model_version, run_meta.as_of)

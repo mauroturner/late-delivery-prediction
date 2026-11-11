@@ -14,6 +14,7 @@ file is never rewritten with other values; a rebuild with the same configuration
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import json
@@ -178,8 +179,21 @@ def _dump(document: dict) -> str:
     return json.dumps(document, sort_keys=True, indent=1, ensure_ascii=False) + "\n"
 
 
+# What the system answers to a hard link on a file system that has none (FAT and exFAT, some network shares). Any other error of ``os.link`` is a real error.
+_NO_HARD_LINKS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.ENOSYS})
+_WINDOWS_NO_HARD_LINKS = frozenset({1, 50})      # ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED
+
+
+def _lacks_hard_links(error: OSError) -> bool:
+    return error.errno in _NO_HARD_LINKS or getattr(error, "winerror", None) in _WINDOWS_NO_HARD_LINKS
+
+
 def _create_exclusive(path: Path, data: bytes) -> bool:
-    """Create `path` with `data` only if it does not exist, all or nothing: True if it was created, False if a file was already there."""
+    """Create `path` with `data` only if it does not exist, all or nothing: True if it was created, False if a file was already there.
+
+    The data is written to a temporary file and hard-linked to `path`, which fails if `path` exists and never shows half a file. On a file system without hard links
+    the creation itself is the check (``O_CREAT | O_EXCL``, see ``_create_without_link``); an error of ``os.link`` that is not the lack of hard links is raised.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
@@ -190,13 +204,35 @@ def _create_exclusive(path: Path, data: bytes) -> bool:
             return True
         except FileExistsError:
             return False
-        except OSError:                     # a file system without hard links: check, then rename
-            if path.exists():
-                return False
-            os.replace(name, path)
-            return True
+        except OSError as error:
+            if not _lacks_hard_links(error):
+                raise
+        return _create_without_link(path, data)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def _create_without_link(path: Path, data: bytes) -> bool:
+    """The creation for a file system without hard links: the exclusive create is the check, so a seal that another process writes at any moment is never replaced.
+
+    Unlike the hard link, the file exists while it is being written; if the write fails the half file is removed, and a reader that looks in between gets
+    ``SealError`` (a seal that cannot be read is never taken for an absent one), not a wrong seal.
+    """
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o644)
+    except FileExistsError:
+        return False
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(descriptor, view) :]
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        Path(path).unlink(missing_ok=True)
+        raise
+    os.close(descriptor)
+    return True
 
 
 def _check_launch(launch: Mapping[str, Any]) -> None:
@@ -273,5 +309,10 @@ def write_test_seal(seal_path: Path, test: Mapping[str, Any]) -> Literal["writte
             raise SealMismatchError("la evaluación de la prueba con la configuración sellada no reproduce los valores sellados, redondeados a 6 decimales (docs/runbook.md, R7)")
         return "unchanged"
     write_atomic(path, _dump({**document, "test": dict(test)}))
+    # The flow has one writer (D61), but the read above, the decision and this write are not one step: a second writer that started from the same read and wrote another
+    # result would have replaced this one without a word. Read it back: if the file does not say what was written, say so.
+    kept = (read_seal(path) or {}).get("test") or {}
+    if _rounded({k: kept.get(k) for k in ("criteria", "metrics")}) != _rounded({k: test[k] for k in ("criteria", "metrics")}):
+        raise SealMismatchError("otra escritura reemplazó la parte de la prueba mientras se escribía la de esta corrida: lo que consta en el sello no es lo que esta corrida calculó (docs/runbook.md, R7)")
     logger.info("seal: test part written to %s", path.name)
     return "written"

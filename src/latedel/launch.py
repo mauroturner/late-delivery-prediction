@@ -4,8 +4,9 @@ At the launch ``fit_model`` trains the 24 candidates, selects and calibrates the
 saves the artifact with its SHA-256, registers it (``model_registry`` and ``baseline_rates``, both insert-only) and writes the part of the launch of the seal. In
 every other run it trains nothing: it checks that the artifact still has the registered SHA-256 (M03) and compares the configuration with the sealed one (M05).
 
-The order at the launch is: train, check the seal, save the artifact, register, in that order, so that a configuration that does not reproduce what was sealed
-(runbook R7) stops the run before anything is saved or registered.
+The order at the launch is: train, check and write the seal, save the artifact, register, in that order, so that a configuration that does not reproduce what was sealed
+(runbook R7) stops the run before anything is saved or registered, and a registered model always has its seal. An interruption leaves one of three states (the seal only; the
+seal and the artifact; all three), and repeating the launch finishes the same launch from any of them (decision D62).
 """
 
 from __future__ import annotations
@@ -176,7 +177,7 @@ def _reuse(conn: sqlite3.Connection, cfg: PipelineConfig, *, run_key: str, as_of
     registered = load_registered_model(conn, cfg)                     # M03: the artifact is deserialized only with the registered fingerprint
     body, config_sha256 = config_fingerprint(cfg, _Chosen(registered.chosen), registered.threshold, source_sha256=source_sha256)
     state = seal_state(cfg.paths.seal, config_sha256)
-    if state == "none" and as_of == cfg.deliveries.launch_date:       # the launch was interrupted after registering the model and before sealing it
+    if state == "none" and as_of == cfg.deliveries.launch_date:       # the registry has the model and the seal file is gone (an interrupted launch does not leave this: it seals first, D62)
         outcome = write_launch_seal(cfg.paths.seal, {"run_key": run_key, **body, "valid_v2_scores_sha256": registered.valid_v2_scores_sha256, "config_sha256": config_sha256})
         state = {"written": "sealed", "unchanged": "match", "post_seal": "post_seal"}[outcome]
     logger.info("fit_model %s: reuse of %s, threshold=%s seal=%s", run_key, registered.model_version, registered.threshold, state)

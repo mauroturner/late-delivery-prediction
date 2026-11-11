@@ -374,3 +374,17 @@ def star_warehouse(history, tmp_path_factory: pytest.TempPathFactory):
         ))
     conn.close()
     return SimpleNamespace(cfg=cfg, db=db, folder=folder, plan=history.plan)
+
+
+@pytest.fixture()
+def monthly(fitted_launch, delivered, tmp_path):
+    """A copy of the warehouse after the launch, with its registered model, ready to receive the monthly deliveries: ``(conn, registered, cfg, folder, plan, entries)``."""
+    from latedel.launch import load_registered_model
+    from latedel.warehouse import connect
+
+    db = tmp_path / "w.sqlite"
+    shutil.copyfile(fitted_launch.db, db)
+    conn = connect(db)
+    folder, plan, entries = delivered
+    yield conn, load_registered_model(conn, fitted_launch.cfg), fitted_launch.cfg, folder, plan, entries
+    conn.close()

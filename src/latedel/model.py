@@ -40,6 +40,22 @@ SET_RANK: dict[str, int] = {name: rank for rank, name in enumerate(FEATURE_SETS)
 CALIBRATION_METHODS = ("isotonic",)
 
 
+class BlockLabelError(ValueError):
+    """A block of the split that the model learns from has the labels of a single class (all late or none late): there is nothing to fit, select, calibrate or measure."""
+
+
+def require_both_classes(y: np.ndarray | pd.Series, block: str) -> None:
+    """Raise ``BlockLabelError`` if the labels of `block` are all of one class: the AUC of V1 would be undefined (scikit-learn warns and answers NaN, and NaN passes the
+    tripwire M01), the classifier cannot be fitted on one class and the threshold of V2 would be chosen on nothing. A block with no orders is not this error."""
+    y = np.asarray(y)
+    if y.size and y.min() == y.max():
+        side = "todos llegaron tarde" if y[0] == 1 else "ninguno llegó tarde"
+        raise BlockLabelError(
+            f"el bloque {block} tiene una sola clase de etiqueta ({side}, {y.size} pedidos): no se puede ajustar, elegir, calibrar ni medir con él. "
+            "Se revisan las fechas de [split] y los datos del bloque (docs/runbook.md, R5)"
+        )
+
+
 @dataclass(frozen=True)
 class Candidate:
     """One point of the grid: a feature set and a configuration of the classifier."""
@@ -120,6 +136,7 @@ def select(fitted: Sequence[tuple[Candidate, Pipeline]], x_v1: Mapping[str, pd.D
     if not fitted:
         raise ValueError("no hay candidatos para elegir")
     y = np.asarray(y_v1)
+    require_both_classes(y, "valid_v1")
     scored = []
     for c, pipeline in fitted:
         if c.feature_set not in x_v1:
@@ -201,9 +218,11 @@ def train_model(conn: sqlite3.Connection, as_of: date, cfg: PipelineConfig) -> T
     missing = [name for name in ("train", "valid_v1", "valid_v2") if name not in parts]
     if missing:
         raise ValueError(f"no hay pedidos con etiqueta en {', '.join(missing)} al {as_of}: el modelo no se puede ajustar")
+    labels = labelled.set_index("order_id")["is_late"]
+    for name in ("train", "valid_v1", "valid_v2"):
+        require_both_classes(labels.loc[parts[name]["order_id"]], name)          # before anything is built or fitted
     sets = list(cfg.features.candidate_sets)
     matrices = _matrices(conn, sets)
-    labels = labelled.set_index("order_id")["is_late"]
 
     def rows(name: str, set_name: str) -> pd.DataFrame:
         return matrices[set_name].loc[parts[name]["order_id"].to_numpy()]

@@ -213,9 +213,21 @@ def build_features(orders: pd.DataFrame, lines: pd.DataFrame, feature_set: str) 
     return result
 
 
-def read_order_frames(conn: sqlite3.Connection) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """``(orders, lines)`` as the warehouse staged them for its calculation date: the two staging tables of the orders, whole, and nothing else."""
-    orders = pd.DataFrame(conn.execute(f"SELECT {', '.join(ORDERS_SCHEMA.names)} FROM stg_orders ORDER BY order_id").fetchall(), columns=ORDERS_SCHEMA.names)
-    lines = pd.DataFrame(conn.execute(f"SELECT {', '.join(ORDER_LINES_SCHEMA.names)} FROM stg_order_lines ORDER BY line_id").fetchall(), columns=ORDER_LINES_SCHEMA.names)
+def read_order_frames(conn: sqlite3.Connection, delivery_id: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``(orders, lines)`` as the warehouse staged them for its calculation date: the two staging tables of the orders, whole, and nothing else.
+
+    With `delivery_id`, only the orders that came in that delivery and their lines (selected in SQL by ``raw_orders.delivery_id``, which is a column of the orders and
+    not of any outcome): the same rows as the whole frames restricted to those orders, so that scoring one delivery does not read everything accumulated (H3).
+    """
+    order_columns, line_columns = ", ".join(ORDERS_SCHEMA.names), ", ".join(ORDER_LINES_SCHEMA.names)
+    if delivery_id is None:
+        order_rows = conn.execute(f"SELECT {order_columns} FROM stg_orders ORDER BY order_id").fetchall()
+        line_rows = conn.execute(f"SELECT {line_columns} FROM stg_order_lines ORDER BY line_id").fetchall()
+    else:
+        mine = "SELECT order_id FROM raw_orders WHERE delivery_id = ?"
+        order_rows = conn.execute(f"SELECT {order_columns} FROM stg_orders WHERE order_id IN ({mine}) ORDER BY order_id", (delivery_id,)).fetchall()
+        line_rows = conn.execute(f"SELECT {line_columns} FROM stg_order_lines WHERE order_id IN ({mine}) ORDER BY line_id", (delivery_id,)).fetchall()
+    orders = pd.DataFrame(order_rows, columns=ORDERS_SCHEMA.names)
+    lines = pd.DataFrame(line_rows, columns=ORDER_LINES_SCHEMA.names)
     orders["order_date"] = pd.to_datetime(orders["order_date"], format="%Y-%m-%d")
     return orders, lines
