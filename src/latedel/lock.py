@@ -269,15 +269,25 @@ def _retrying(action, what: str, path: Path) -> bool:
     return False
 
 
-def _rewrite(path: Path, record: dict) -> None:
-    """Say `record` in the lock this process holds, replacing the file whole (a reader sees the old record or the new one, never half a file)."""
-    handle, name = tempfile.mkstemp(dir=path.parent, prefix=LOCK_NAME + ".", suffix=".tmp")
+def _rewrite(path: Path, record: dict) -> bool:
+    """Say `record` in the lock this process holds, replacing the file whole (a reader sees the old record or the new one, never half a file); True if it was said.
+    Never raises an ``OSError``: the record only tells a reader who holds the lock, so a rewrite that fails (a full disk) is logged and the file keeps the previous record
+    (review of B2, R4-rewrite-unguarded-raise)."""
+    name = None
     try:
+        handle, name = tempfile.mkstemp(dir=path.parent, prefix=LOCK_NAME + ".", suffix=".tmp")
         with os.fdopen(handle, "wb") as out:
             out.write(_encoded(record))
-        _retrying(lambda: os.replace(name, path), "rewrite", path)
+        return _retrying(lambda: os.replace(name, path), "rewrite", path)
+    except OSError:
+        logger.warning("could not rewrite the lock %s: it keeps saying the previous command", path, exc_info=True)
+        return False
     finally:
-        Path(name).unlink(missing_ok=True)
+        if name is not None:
+            try:
+                Path(name).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("could not remove the temporary file %s of a rewrite of the lock", name, exc_info=True)
 
 
 # --- taking and giving back --------------------------------------------------------------------------------------------------------------------------
@@ -297,7 +307,11 @@ def acquire(folder: str | os.PathLike, *, command: str, run_key: str | None = No
                 raise _thread_refusal(path, entry)
             record = {**entry.records[-1], "command": command, "run_key": run_key, "since": datetime.now(UTC).isoformat(timespec="seconds")}
             entry.records.append(record)
-            _rewrite(path, record)   # the run in progress, not only the outer command (review of H9, R4-replay-lock-run-key-granularity)
+            try:
+                _rewrite(path, record)   # the run in progress, not only the outer command (review of H9, R4-replay-lock-run-key-granularity)
+            except BaseException:   # interrupted while saying it: this take did not happen, so its record must not outlive it (R4-nested-acquire-permanent-lock-leak)
+                entry.records.pop()
+                raise
             return Holding(path, entry.token)
         path.parent.mkdir(parents=True, exist_ok=True)
         token = secrets.token_hex(16)
@@ -315,7 +329,7 @@ def acquire(folder: str | os.PathLike, *, command: str, run_key: str | None = No
 
 def release(held: Holding) -> None:
     """Give the lock back. An inner release brings the outer record back; the outer one removes the file, only while it still carries this process's token (never
-    another's). It never raises: a file it cannot remove is logged as a warning and left for a person (runbook R9)."""
+    another's). It never raises an ``OSError``: a file it cannot remove or rewrite is logged as a warning, and one it cannot remove is left for a person (runbook R9)."""
     with _REGISTRY:
         entry = _HELD.get(held.path)
         if entry is None or entry.token != held.token:

@@ -173,6 +173,48 @@ def test_while_replay_holds_the_lock_the_file_says_the_run_in_progress_and_then_
     assert list(tmp_path.iterdir()) == []   # the file is gone and no temporary file of a rewrite is left
 
 
+def rewrite_cannot_write(monkeypatch) -> None:
+    """The temporary file of a rewrite cannot be created, as on a full disk (``ENOSPC``)."""
+    def no_space(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(lock_module.tempfile, "mkstemp", no_space)
+
+
+def test_a_nested_take_whose_rewrite_fails_never_leaves_the_lock_behind(tmp_path, monkeypatch, caplog):
+    """R4-nested-acquire-permanent-lock-leak (review of B2): the inner take kept its record in this process's bookkeeping before the rewrite raised, so the outer release
+    only rewrote the file and the lock outlived the replay, refusing every later writer until a person removed it. A rewrite only says who holds the lock: when it fails,
+    the take still happens, a warning says so, and the outer release removes the file."""
+    outer = acquire(tmp_path, command="replay", run_key=None)
+    rewrite_cannot_write(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="latedel.lock"):
+        try:
+            inner = acquire(tmp_path, command="run", run_key="r1")
+        except OSError:
+            inner = None   # the take failed: nothing to give back
+    monkeypatch.undo()
+    if inner is not None:
+        release(inner)
+    release(outer)
+    assert list(tmp_path.iterdir()) == []
+    assert inner is not None
+    assert any("could not rewrite the lock" in r.getMessage() for r in caplog.records)
+
+
+def test_a_nested_release_whose_rewrite_fails_never_raises_and_the_outer_release_removes_the_lock(tmp_path, monkeypatch, caplog):
+    """R4-rewrite-unguarded-raise (review of B2): the inner release of a replay rewrote the file with no guard, so a write error left the release raising, which B2 says
+    it never does, and replaced the outcome of the run."""
+    outer = acquire(tmp_path, command="replay", run_key=None)
+    inner = acquire(tmp_path, command="run", run_key="r1")
+    rewrite_cannot_write(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="latedel.lock"):
+        release(inner)
+    monkeypatch.undo()
+    release(outer)
+    assert list(tmp_path.iterdir()) == []
+    assert any("could not rewrite the lock" in r.getMessage() for r in caplog.records)
+
+
 def test_another_thread_of_the_same_process_is_refused_like_another_process(tmp_path):
     """R3-003: the registry of the locks this process holds had no thread guard, so a second thread took the folder as if it were the holder's own nested call."""
     held = acquire(tmp_path, command="run", run_key="r1")
