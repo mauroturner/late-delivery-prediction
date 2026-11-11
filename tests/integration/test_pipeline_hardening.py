@@ -82,6 +82,29 @@ def test_a_failure_saving_the_result_of_a_middle_task_is_recorded_as_a_failure_a
     assert run_row(config, "r2")[0] == "ok" and manifest(config)[SECOND] == ("loaded", "r2") and THIRD not in manifest(config)
 
 
+def test_a_full_disk_that_also_fails_the_recording_of_the_failure_still_shows_the_error_of_the_save(pipeline_closed, fixture_csv, tmp_path, monkeypatch, caplog):
+    """The review of H7 (R4-record-failure-cascading-write) said a full disk would also fail the writes of ``_record_failure`` and replace the error of the save. Each of
+    those writes is tried on its own and logged (AC27): with the state file, the row of SQLite and the exported files all failing after the save of ``load`` fails, the
+    caller still sees the error of the save and the log names the task, the save and each write that could not be done."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    real = pipeline._save_task
+
+    def save(ctx, task, *args, **kwargs):
+        if task != "load":
+            return real(ctx, task, *args, **kwargs)
+        for name in ("_write_state", "_record", "_refresh_or_mark_stale"):   # from now on the disk is full for every write
+            monkeypatch.setattr(pipeline, name, lambda *a, **k: (_ for _ in ()).throw(OSError("still no space left on the device")))
+        raise OSError("no space left on the device")
+
+    with caplog.at_level(logging.WARNING, logger="latedel.pipeline"):
+        monkeypatch.setattr(pipeline, "_save_task", save)
+        with pytest.raises(OSError, match=r"^no space left on the device$"):
+            run_all(config, run_key="r2")
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("load failed" in m and "while saving its result" in m for m in messages)
+    assert sum(m.startswith("could not record the failure of load") or m.startswith("could not refresh the exported files") for m in messages) == 3
+
+
 def test_a_failure_saving_the_result_of_deliver_leaves_a_run_that_takes_the_same_delivery_again(pipeline_closed, fixture_csv, tmp_path, monkeypatch):
     """The review said a retried ``deliver`` would take the next delivery; it does not: the published delivery is still the pending one (``next_pending``), so the
     retry takes it again, and the failure is recorded in the state file (the run has no row in SQLite before ``load``)."""
