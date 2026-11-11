@@ -19,9 +19,10 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -34,7 +35,7 @@ from latedel.features import build_features, read_order_frames
 from latedel.launch import RegisteredModel, load_registered_model
 from latedel.model import importance as model_importance
 from latedel.model import predict_risk
-from latedel.registry import SealMismatchError, read_seal, seal_state, write_test_seal
+from latedel.registry import SealError, SealMismatchError, read_seal, seal_state, write_test_seal
 from latedel.split import labelled_orders
 from latedel.threshold import Costs, choose_threshold, net_benefit, sensitivity, threshold_grid
 from latedel.warehouse import apply_schema
@@ -392,7 +393,13 @@ def evaluate_criteria(result: EvaluationResult, cfg: PipelineConfig) -> list[Cri
     """C01 to C09 on the result of the test, with the thresholds of ``[criteria]`` and a fixed verdict that says «supera» or «no supera» with its numbers."""
     if result.scope != "test":
         raise ValueError(f"los criterios C01 a C09 se calculan sobre la prueba; se recibió {result.scope!r}")
-    m, b2, b5 = result.metrics[MODEL], result.metrics["b2_mode"], result.metrics["b5_mode_noon"]
+    return _criteria_of(result.metrics, result.bootstrap, cfg.criteria.c06_max_ece, cfg.criteria.c06_max_bias, _c09(result))
+
+
+def _criteria_of(metrics: Mapping[str, Mapping[str, Any]], bootstrap: Mapping[str, Any], max_ece: float, max_bias: float, c09: Criterion) -> list[Criterion]:
+    """C01 to C09 from the metrics of the model, B2 and B5 on the test, the two bootstraps, the limits of C06 and C09: what ``evaluate_criteria`` and the rebuild from
+    the seal (``criteria_from_seal``) share, so that both write the same thresholds and verdicts."""
+    m, b2, b5 = metrics[MODEL], metrics["b2_mode"], metrics["b5_mode_noon"]
     out: list[Criterion] = []
 
     def verdict(ok: bool, text_pass: str, text_fail: str) -> str:
@@ -406,7 +413,7 @@ def evaluate_criteria(result: EvaluationResult, cfg: PipelineConfig) -> list[Cri
     ))
     # C02 and C03: the lower end of the interval above 0
     for criterion_id, other, label_es, name in (("C02", "b2_mode", "la regla por modo", "B2"), ("C03", "b5_mode_noon", "la regla de dos variables", "B5")):
-        boot = result.bootstrap.get(f"model_vs_{other}")
+        boot = bootstrap.get(f"model_vs_{other}")
         threshold = f"Límite inferior del intervalo del 95 % de AUC(modelo) − AUC({name}) > 0"
         if boot is None or boot.ci_low is None or math.isnan(boot.diff):
             out.append(_unavailable(criterion_id, threshold, "ninguna remuestra tiene las dos clases"))
@@ -432,7 +439,6 @@ def evaluate_criteria(result: EvaluationResult, cfg: PipelineConfig) -> list[Cri
         f"{es(m['nb_per_1000'], 1)} frente a {es(b5['nb_per_1000'], 1)} u. por cada 1.000 pedidos.",
     ))
     # C06
-    max_ece, max_bias = cfg.criteria.c06_max_ece, cfg.criteria.c06_max_bias
     if m["ece"] is None or m["bias"] is None:
         out.append(_unavailable("C06", f"ECE ≤ {es(max_ece, 2)} y |media de p − tasa observada| ≤ {es(max_bias, 2)}", "la calibración no está definida"))
     else:
@@ -457,24 +463,59 @@ def evaluate_criteria(result: EvaluationResult, cfg: PipelineConfig) -> list[Cri
         f"{es(model_late, 0)} pedidos tarde frente a {es(b2_late, 0)}.",
     ))
     # C09
-    out.append(_c09(result))
+    out.append(c09)
     return out
 
 
+C09_THRESHOLD_ES = "En cada punto de equilibrio de 0,10 a 0,90, de a 0,05, con los umbrales elegidos en V2: BN(modelo) ≥ BN(B2)"
+C09_RANGE = (0.10, 0.90)   # the break-evens of the preregistered C09 (its threshold): the seal keeps how many held and of how many, not the range
+
+
 def _c09(result: EvaluationResult) -> Criterion:
-    threshold = "En cada punto de equilibrio de 0,10 a 0,90, de a 0,05, con los umbrales elegidos en V2: BN(modelo) ≥ BN(B2)"
     test = result.sensitivity[result.sensitivity["scope"] == "test"]
     pivot = test.pivot(index="break_even", columns="method", values="nb_per_1000") if len(test) else pd.DataFrame()
     if pivot.empty or MODEL not in pivot or "b2_mode" not in pivot:
-        return _unavailable("C09", threshold, "no hay sensibilidad en la prueba")
+        return _unavailable("C09", C09_THRESHOLD_ES, "no hay sensibilidad en la prueba")
     holds = (pivot[MODEL] >= pivot["b2_mode"] - TIE)
-    total, kept = len(pivot), int(holds.sum())
-    ok = bool(holds.all())
+    return _c09_criterion(int(holds.sum()), len(pivot), float(pivot.index.min()), float(pivot.index.max()))
+
+
+def _c09_criterion(kept: int, total: int, low: float, high: float) -> Criterion:
+    ok = kept == total
     if ok:
-        text = f"El modelo supera o iguala a B2 en beneficio neto en los {total} puntos de equilibrio ({es(float(pivot.index.min()), 2)} a {es(float(pivot.index.max()), 2)})."
+        text = f"El modelo supera o iguala a B2 en beneficio neto en los {total} puntos de equilibrio ({es(low, 2)} a {es(high, 2)})."
     else:
         text = f"El modelo no supera a B2 en todos los puntos de equilibrio: lo iguala o supera en {kept} de {total}."
-    return _criterion("C09", threshold, ok, float(kept), float(total), text)
+    return _criterion("C09", C09_THRESHOLD_ES, ok, float(kept), float(total), text)
+
+
+def _rounded_entry(entry: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    return None if entry is None else {k: round(v, 6) if isinstance(v, float) else v for k, v in entry.items()}
+
+
+def criteria_from_seal(seal: Mapping[str, Any]) -> list[Criterion]:
+    """C01 to C09 as the seal keeps them, for a warehouse that has no sealed test (B3 of the evaluation of ``eef9bea``, decision D88).
+
+    The values are the sealed ones; the thresholds and the verdicts are the ones ``evaluate_criteria`` writes, built from the sealed metrics of the model, B2 and B5, the
+    sealed intervals and the C06 limits of the sealed launch. Each criterion must give back its own sealed entry (value, reference, interval and verdict to 6 decimals):
+    a seal whose numbers do not give its own verdicts is a ``SealError``, never shown.
+    """
+    test, launch = seal["test"], seal["launch"]
+    entries = {e["id"]: e for e in test["criteria"]}
+    bootstrap = {
+        f"model_vs_{other}": SimpleNamespace(diff=entries[cid]["value"], ci_low=entries[cid]["ci_low"], ci_high=entries[cid]["ci_high"])
+        for cid, other in (("C02", "b2_mode"), ("C03", "b5_mode_noon")) if entries.get(cid, {}).get("value") is not None
+    }
+    c09 = entries.get("C09", {})
+    rebuilt = (
+        _c09_criterion(int(c09["value"]), int(c09["baseline_value"]), *C09_RANGE) if c09.get("value") is not None and c09.get("baseline_value") is not None
+        else _unavailable("C09", C09_THRESHOLD_ES, "no hay sensibilidad en la prueba")
+    )
+    criteria = _criteria_of(test["metrics"], bootstrap, launch["criteria"]["c06_max_ece"], launch["criteria"]["c06_max_bias"], rebuilt)
+    for criterion in criteria:
+        if _rounded_entry(criterion.seal_entry()) != _rounded_entry(entries.get(criterion.criterion_id)):
+            raise SealError(f"la parte de la prueba del sello no da su propio {criterion.criterion_id}: sus métricas y su entrada no coinciden (docs/runbook.md, R7)")
+    return criteria
 
 
 def post_break_criterion(result: EvaluationResult) -> Criterion:

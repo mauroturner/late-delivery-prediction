@@ -8,6 +8,7 @@ tables with scikit-learn, never with the module under test. Nothing here reads t
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import replace
 from datetime import date
@@ -353,3 +354,75 @@ def test_the_summary_reads_the_stored_evaluation_and_every_verdict_agrees_with_i
     run_evaluate(conn, cfg, date(2017, 11, 30))
     later = load_summary(conn, cfg, run_key="run-M2017-11", as_of=date(2017, 11, 30))
     assert later.criteria == first.criteria and later.metrics["test"] == first.metrics["test"]
+
+
+# --- B3 of the evaluation of eef9bea: after the seal, a warehouse with no sealed rows (decision D88) -------------------------------------------------------
+
+
+def criteria_table(text: str) -> list[str]:
+    return [line for line in text.splitlines() if re.match(r"\| C\d\d \|", line)]
+
+
+def rounded(value):
+    if isinstance(value, float):
+        return round(value, 6)
+    if isinstance(value, dict):
+        return {k: rounded(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [rounded(v) for v in value]
+    return value
+
+
+def test_after_the_seal_a_warehouse_without_sealed_rows_shows_the_sealed_result_from_the_seal_and_the_post_seal_analysis_below(copy_evaluated, tmp_path):
+    """B3: after the seal, a replay from scratch with other costs (the README's own path for another cost) kept the seal, but its summary said «La prueba se evalúa con
+    la entrega de 2017-10: hasta entonces los criterios C01 a C10 quedan pendientes», with ``state: pending`` and no criteria: the warehouse has no sealed rows, only
+    post-seal ones. The summary takes the sealed criteria and metrics from the seal, with the costs that were sealed, and shows the post-seal analysis below them."""
+    from latedel.reporting import RESULTS_END, RESULTS_START, load_summary, read_block, summary_json, sync_results, write_summary
+
+    conn, cfg, _first = copy_evaluated                                          # the test sealed at 2017-10-31, its rows in this warehouse
+    sealed = load_summary(conn, cfg, run_key="run-sealed", as_of=date(2017, 10, 31))
+    sealed_text = write_summary(sealed, tmp_path / "sealed")[1].read_text(encoding="utf-8")
+    seal = cfg.paths.seal.read_bytes()
+    for table in EVAL_TABLES:                                                   # a warehouse rebuilt from scratch: no evaluation stored yet
+        conn.execute(f"DELETE FROM {table}")
+    other = replace(cfg, costs=replace(cfg.costs, alert_cost=9.0))
+    assert run_evaluate(conn, other, date(2017, 10, 31), run_key="run-other").test_seal == "post_seal"
+    assert load_criteria(conn, "sealed") == [] and cfg.paths.seal.read_bytes() == seal
+
+    summary = load_summary(conn, other, run_key="run-other", as_of=date(2017, 10, 31))
+    in_the_seal = ("model", "b2_mode", "b5_mode_noon")                           # the seal keeps the metrics of the three methods of the summary's tables
+    assert summary.test_evaluated and rounded(summary.criteria) == rounded(sealed.criteria) and set(summary.metrics) == {"test"}
+    assert rounded(summary.metrics["test"]) == rounded({m: sealed.metrics["test"][m] for m in in_the_seal})
+    assert summary.costs == sealed.costs == {"alert_cost": 5.0, "late_cost": 20.0, "effect": 0.5}   # the sealed costs, not this run's
+    assert [c.criterion_id for c in summary.post_seal_criteria] == [f"C0{i}" for i in range(1, 10)]
+    document = summary_json(summary)
+    assert document["state"] == "evaluated" and document["pending_delivery"] is None and document["failed"] == summary_json(sealed)["failed"]
+    assert rounded(document["criteria"]) == rounded(summary_json(sealed)["criteria"]) and document["post_seal"]["costs"]["alert_cost"] == 9.0
+    json_path, md_path = write_summary(summary, tmp_path / "reports")
+    text = md_path.read_text(encoding="utf-8")
+    assert "quedan pendientes" not in text and text.splitlines()[2] == sealed_text.splitlines()[2]   # the same headline: «El modelo supera … y no supera …»
+    assert criteria_table(text)[:9] == criteria_table(sealed_text)                                    # the sealed rows first, as the sealed run wrote them
+    assert "model_seal.json" in text and text.index("Posterior al sello") > text.index("| C09 |") and "alerta 9,0" in text
+    assert json.loads(json_path.read_text(encoding="utf-8"))["state"] == "evaluated"
+    readme = tmp_path / "README.md"                                             # docs-sync copies the same block into the README
+    readme.write_text(f"# P\n\n{RESULTS_START}\n{RESULTS_END}\n", encoding="utf-8", newline="")
+    sync_results(readme, md_path)
+    assert read_block(readme) == text.strip("\n")
+
+
+def test_the_sealed_criteria_rebuilt_from_the_project_s_seal_are_the_rows_of_its_versioned_summary(cfg, tmp_path):
+    """The rebuild from the seal writes, for the real seal of U25, the same criteria rows and the same table of the test that ``reports/evaluation_summary.md`` has (it
+    reads the versioned files and writes only under the test's folder)."""
+    from latedel.reporting import load_summary, write_summary
+    from latedel.warehouse import apply_schema
+
+    versioned = (cfg.project_root / "reports" / "evaluation_summary.md").read_text(encoding="utf-8")
+    conn = sqlite3.connect(":memory:")
+    apply_schema(conn)
+    summary = load_summary(conn, cfg, run_key="run-rebuilt", as_of=date(2018, 2, 7))
+    conn.close()
+    text = write_summary(summary, tmp_path)[1].read_text(encoding="utf-8")
+    assert summary.test_evaluated and [c.criterion_id for c in summary.criteria] == [f"C0{i}" for i in range(1, 10)]
+    assert criteria_table(text) == criteria_table(versioned)[:9]
+    test_table = text[text.index("**Prueba"):].split("\n\n")[1]
+    assert test_table in versioned and text.splitlines()[2] == versioned.splitlines()[2]

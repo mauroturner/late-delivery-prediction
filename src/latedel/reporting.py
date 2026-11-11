@@ -3,7 +3,9 @@
 ``load_summary`` reads what ``evaluation`` stored (the criteria and the metrics, sealed first and, apart, whatever was computed with another configuration) and
 ``write_summary`` writes ``reports/evaluation_summary.json`` and ``.md`` from it. The summary is built from the stored tables and not from a fresh computation,
 so a monthly run after the test was sealed prints the same text without touching the test. Every criterion that fails says «no supera» with its numbers; before the
-test is evaluated the summary says so, shows the figures of V2 labelled as validation, and leaves the criteria pending.
+test is evaluated the summary says so, shows the figures of V2 labelled as validation, and leaves the criteria pending. After the seal, a warehouse that has no sealed
+test (a replay from scratch with other costs, the README's own path for them) takes the sealed criteria and metrics from the seal, says so, and shows what it computed
+below them as post-seal, with its own costs (B3 of the evaluation of ``eef9bea``, decision D88). The seal is only read.
 
 ``sync_block`` copies the Markdown between two markers of a file (the README, ``<!-- results:start -->`` and ``<!-- results:end -->``): the block of results is
 copied, never written by hand, and a test compares it with the summary.
@@ -21,8 +23,9 @@ from typing import Any
 
 from latedel.config import PipelineConfig
 from latedel.deliveries import delivery_plan
-from latedel.evaluation import METHOD_LABELS_ES, Criterion, es, load_criteria, load_metrics
+from latedel.evaluation import METHOD_LABELS_ES, Criterion, criteria_from_seal, es, load_criteria, load_metrics
 from latedel.files import write_atomic
+from latedel.registry import read_seal
 
 RESULTS_START = "<!-- results:start -->"
 RESULTS_END = "<!-- results:end -->"
@@ -34,7 +37,11 @@ Metrics = dict[str, dict[str, dict[str, float | None]]]
 
 @dataclass(frozen=True)
 class Summary:
-    """What the summary says: the sealed criteria and metrics, the ones computed with another configuration (``post_seal``) and the costs they used."""
+    """What the summary says: the sealed criteria and metrics, the ones computed with another configuration (``post_seal``) and the costs they used.
+
+    ``costs`` are the sealed ones once there is a seal; ``post_seal_costs`` the costs of this run's configuration when they are other. ``sealed_from_seal`` says that the
+    sealed criteria and test metrics were read from the seal, because this warehouse has no sealed test.
+    """
 
     run_key: str
     as_of: date
@@ -44,6 +51,8 @@ class Summary:
     metrics: Metrics = field(default_factory=dict)
     post_seal_criteria: list[Criterion] = field(default_factory=list)
     post_seal_metrics: Metrics = field(default_factory=dict)
+    sealed_from_seal: bool = False
+    post_seal_costs: dict[str, float] | None = None
 
     @property
     def test_evaluated(self) -> bool:
@@ -61,10 +70,17 @@ def pending_delivery(cfg: PipelineConfig) -> str:
 
 
 def load_summary(conn: sqlite3.Connection, cfg: PipelineConfig, *, run_key: str, as_of: date) -> Summary:
-    """The summary from the stored evaluation of the warehouse."""
+    """The summary from the stored evaluation of the warehouse; after the seal, a warehouse without the sealed test takes it from the seal (B3)."""
+    criteria, metrics = load_criteria(conn, "sealed"), load_metrics(conn, "sealed")
+    own = {"alert_cost": cfg.costs.alert_cost, "late_cost": cfg.costs.late_cost, "effect": cfg.costs.effect}
+    seal = read_seal(cfg.paths.seal)
+    sealed_costs = dict(seal["launch"]["costs"]) if seal is not None else own
+    from_seal = seal is not None and seal.get("test") is not None and not any(c.criterion_id == "C01" for c in criteria)
+    if from_seal:   # only what the seal holds is the sealed result: the criteria C01-C09 and the metrics of the test
+        criteria, metrics = criteria_from_seal(seal), {"test": {name: dict(values) for name, values in seal["test"]["metrics"].items()}}
     return Summary(
-        run_key, as_of, pending_delivery(cfg), {"alert_cost": cfg.costs.alert_cost, "late_cost": cfg.costs.late_cost, "effect": cfg.costs.effect},
-        load_criteria(conn, "sealed"), load_metrics(conn, "sealed"), load_criteria(conn, "post_seal"), load_metrics(conn, "post_seal"),
+        run_key, as_of, pending_delivery(cfg), sealed_costs, criteria, metrics, load_criteria(conn, "post_seal"), load_metrics(conn, "post_seal"),
+        sealed_from_seal=from_seal, post_seal_costs=None if own == sealed_costs else own,
     )
 
 
@@ -97,12 +113,17 @@ def _criteria_table(criteria: list[Criterion]) -> list[str]:
     return [*lines, ""]
 
 
+def _costs_es(costs: dict[str, float]) -> str:
+    return (
+        f"alerta {es(costs['alert_cost'], 1)}, retraso {es(costs['late_cost'], 1)}, efecto {es(costs['effect'], 2)} "
+        f"(punto de equilibrio {es(costs['alert_cost'] / (costs['late_cost'] * costs['effect']), 2)})"
+    )
+
+
 def results_markdown(summary: Summary) -> str:
     """The Markdown block of results (the one the README copies)."""
-    costs = summary.costs
     declared = (
-        f"Costos supuestos y declarados, en unidades genéricas: alerta {es(costs['alert_cost'], 1)}, retraso {es(costs['late_cost'], 1)}, efecto {es(costs['effect'], 2)} "
-        f"(punto de equilibrio {es(costs['alert_cost'] / (costs['late_cost'] * costs['effect']), 2)}). Los criterios y sus umbrales se fijaron antes de construir (`docs/requirements.md`, sección 8.1)."
+        f"Costos supuestos y declarados, en unidades genéricas: {_costs_es(summary.costs)}. Los criterios y sus umbrales se fijaron antes de construir (`docs/requirements.md`, sección 8.1)."
     )
     lines = [f"Evaluación al {summary.as_of.isoformat()} (corrida `{summary.run_key}`).", ""]
     if not summary.test_evaluated:
@@ -120,6 +141,10 @@ def results_markdown(summary: Summary) -> str:
         else:
             lines += [f"El modelo supera {len(scored)} de {len(scored)} criterios con umbral.", ""]
         lines += [declared, ""]
+        if summary.sealed_from_seal:
+            other = any(c.criterion_id == "C01" for c in summary.post_seal_criteria)
+            why = "se calculó con otra configuración, que va debajo como posterior al sello" if other else f"todavía no llegó a la entrega que la evalúa ({summary.pending_delivery})"
+            lines += [f"Los criterios C01 a C09 y las cifras de la prueba son los que constan en el sello (`model_seal.json`): este almacén no tiene la prueba sellada porque {why}.", ""]
         lines += _criteria_table(summary.criteria)
         for scope in ("test", "post_break", "valid_v2"):
             lines += _scope_table(scope, summary.metrics)
@@ -127,6 +152,8 @@ def results_markdown(summary: Summary) -> str:
         lines += [
             "**Posterior al sello**: calculado con otra configuración que la sellada en el lanzamiento. Se informa aparte y no reemplaza lo sellado.", "",
         ]
+        if summary.post_seal_costs is not None:
+            lines += [f"Costos de esta configuración: {_costs_es(summary.post_seal_costs)}.", ""]
         if summary.post_seal_criteria:
             lines += _criteria_table(summary.post_seal_criteria)
         for scope in ("test", "post_break", "valid_v2"):
@@ -161,12 +188,17 @@ def _criterion_json(c: Criterion) -> dict[str, Any]:
 
 def summary_json(summary: Summary) -> dict[str, Any]:
     """The summary as a JSON-ready dictionary: no order number, no personal data, only the criteria and the aggregate metrics."""
-    return _clean({
+    document = {
         "version": SUMMARY_VERSION, "run_key": summary.run_key, "as_of": summary.as_of.isoformat(), "state": "evaluated" if summary.test_evaluated else "pending",
         "pending_delivery": None if summary.test_evaluated else summary.pending_delivery, "costs": summary.costs,
         "failed": [c.criterion_id for c in summary.failed], "criteria": [_criterion_json(c) for c in summary.criteria], "metrics": summary.metrics,
         "post_seal": {"criteria": [_criterion_json(c) for c in summary.post_seal_criteria], "metrics": summary.post_seal_metrics},
-    })
+    }
+    if summary.sealed_from_seal:      # the two keys appear only when they say something: the summary of a sealed run is the same as before B3
+        document["sealed_from"] = "model_seal.json"
+    if summary.post_seal_costs is not None:
+        document["post_seal"]["costs"] = summary.post_seal_costs
+    return _clean(document)
 
 
 def write_summary(summary: Summary, reports_dir: Path) -> tuple[Path, Path]:
