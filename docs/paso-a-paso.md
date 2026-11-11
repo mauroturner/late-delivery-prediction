@@ -112,7 +112,7 @@ El README con los títulos del plan y el bloque de resultados copiado por `pytho
 
 El diccionario de datos con las 53 columnas de la fuente y su destino, y las tablas de los 20 Parquet generadas por `docs-sync` desde el modelo semántico; el runbook R1-R13 con todo lo que las revisiones dejaron para él; este paso a paso; las filas del proyecto 03 en `SITE-UPDATES.md` con las cifras de la corrida real, y «03» en las filas de `LANDING-EXPANSION.md` de las tecnologías que usa (D27). Las pruebas de la documentación comprueban que cada decisión tiene sus siete campos, que el número de pruebas que dicen los documentos es el de la colección y que cada cifra de memoria nombra su contador (D85).
 
-## 14. La evaluación independiente y sus correcciones (Opus) `f8d09fe` `7af35f2` `1032732` `b5b2c08` `c1c1366` `6f3be98`
+## 14. La evaluación independiente, sus correcciones y su comprobación (Opus, 2026-11-11 10:28-14:06) `f8d09fe` `7af35f2` `1032732` `b5b2c08` `c1c1366` `6f3be98` `9bb8e75` `8263735` `441cccd`
 
 Un agente con Opus que no construyó el proyecto evaluó `eef9bea` en un clon aparte, en solo lectura ([evaluation.md](evaluation.md)): recalculó cada cifra de C01 a C10 con un lector propio y dio lo mismo, sondeó la fuga, las opciones de la línea de comandos, el modo rápido, las corridas cerradas, el bloqueo y el sello, y repitió la corrida real, que reprodujo todas las salidas versionadas. Encontró seis bloqueantes y seis advertencias. Otro agente con Opus los corrigió con la prueba primero, vista fallar por la razón que daba la evaluación, una mutación por regla en una copia fuera del árbol y, en el código compartido, una comparación de las órdenes con `3abd982`:
 
@@ -122,13 +122,28 @@ Un agente con Opus que no construyó el proyecto evaluó `eef9bea` en un clon ap
 - `b5b2c08` (B4, D89): una prueba que difiere del sello solo donde actúan claves que la huella no cubre es otra configuración, no una reproducción fallida.
 - `c1c1366` (A2 y A4, D90): un `LATEDEL_CONFIG` relativo se toma de la carpeta del proyecto; `docs-sync` sin README dice por qué.
 - `6f3be98` (A1, D91): tres pruebas lentas más baratas; la suite bajó de 162,26 s y 154,27 s a 149,21 s y 142,19 s, sin llegar a los 135 s fijados.
-- El último commit (B5, B6 y A6, D92): esta sección, la de H9, `review-advisories.md`, el README, D27, la fila de SciPy y la prueba de las advertencias abiertas.
+- `9bb8e75` (B5, B6 y A6, D92, 12:39): esta sección, la de H9, `review-advisories.md`, el README, D27, la fila de SciPy y la prueba de las advertencias abiertas.
 
 Una repetición real completa con el código corregido, en una copia fuera del árbol, reprodujo el sello byte a byte, las siete figuras byte a byte y los demás archivos versionados salvo las claves de corrida, las horas y las celdas de memoria; ninguna salida versionada se regeneró ni se volvió a versionar.
 
+**Las revisiones nativas de las correcciones** (S11: el consentimiento se aceptó de forma automática). Cada corrección que tocaba un punto de riesgo alto se revisó sola, con los carriles que cada una pedía:
+
+- B1 (`3abd982..f8d09fe`, ítem 1, riesgo y confiabilidad): aprobó y se reconoció, con tres advertencias.
+- B3 (`7af35f2..1032732`, ítem 1) aprobó con cuatro; B4 (`1032732..b5b2c08`, ítem 1) con dos; A2 (`b5b2c08..c1c1366`, ítem 3) con dos.
+- B2 (`f8d09fe..7af35f2`, ítem 4, riesgo, resiliencia y confiabilidad) terminó `correction_required` por dos hallazgos deterministas: la toma anidada que fallaba al reescribir dejaba su registro en `_HELD` y el bloqueo quedaba para siempre (bloqueante), y la liberación anidada podía levantar un `OSError` aunque dice que nunca levanta (crítico). La sesión que orquestaba los corrigió con la prueba primero en la copia de la revisión (5c4b417, 70 líneas; la RED fue el bloqueo que quedaba y el `OSError` de la liberación), la validación dirigida aprobó con seis advertencias, se reconoció, y la corrección se llevó a la rama como `8263735` (13:13) con el mismo identificador de parche. Las pruebas del bloqueo, del endurecimiento y del compose pasaron (67).
+- Los tramos `9e5f5da..3abd982` y `c1c1366..9bb8e75` quedaron medianos y bajo el presupuesto de la revisión, sin revisión.
+
+Las advertencias de todas esas revisiones y su resolución están en `review-advisories.md`; quedan abiertas cuatro (`R3-retrying-exc-info-cleared`, `R3-seal-mismatch-untested`, `R3-pending-why-branch-untested` y `R3-002` de la revisión de B4) además de la A1.
+
+**La comprobación de las correcciones (Opus).** Otro agente con Opus, que no evaluó ni corrigió, rehízo las sondas de B1 a B6 en dos clones, `eef9bea` (evaluado) y `52c7eeb` (corregido), con 38 copias de trabajo: cada bloqueante se reproduce en el primero y no en el segundo, las advertencias corregidas también, una repetición real con el código corregido reprodujo el sello y las figuras byte a byte, y una comparación de 34 pasos de la línea de comandos no mostró ninguna diferencia que nadie pidiera. Suite rápida 142,99 s y 140,95 s en reposo (una falla: la cifra de pruebas, pendiente de esta sincronización); `-m docker` 2 de 2 en 74,50 s. Su informe está resumido en la «Comprobación» de [evaluation.md](evaluation.md). Encontró un hueco que las correcciones no habían causado: `task load` cargaba una entrega que su corrida no había validado, o que su validación había rechazado.
+
+**El rechazo de `load` sin validación** (`441cccd`, 14:01, la sesión que orquestaba, en línea, con la prueba primero; D93). `load` se rechaza con salida 2 y antes de escribir si no existe el informe de validación de la corrida o si una regla bloqueante falla en él. La RED fueron las dos pruebas nuevas: `load` escribía y después fallaba con `FileNotFoundError`, y una entrega rechazada se cargaba; una mutación que quita el rechazo cae por su prueba. Su revisión nativa (`52c7eeb..441cccd`, ítem 1, riesgo y confiabilidad) aprobó con tres advertencias. La suite rápida en `441cccd`: 1.298 pruebas, 147,15 s y 144,38 s en dos corridas seguidas en un clon nuevo.
+
+**Esta sincronización** (Sonnet): el commit de documentación que sigue a `441cccd` llena la «Comprobación», agrega D93, las resoluciones de las advertencias de las revisiones de las correcciones y de la comprobación, el runbook R3 y las cifras (1.298 pruebas y los dos tiempos), sin tocar código, pruebas ni ninguna salida versionada.
+
 ## Lo que falta
 
-- **La comprobación de las correcciones** (plan, sección 25): un agente que no las hizo repite las sondas de B1 a B6 sobre el último commit y llena la «Comprobación» de [evaluation.md](evaluation.md); después, la documentación queda sincronizada con ese commit. A1 (la suite rápida por encima de los 135 s fijados para la corrección) queda abierta para el dueño (D91).
+- **Las advertencias abiertas**: A1 (la suite rápida por encima de los 135 s fijados para la corrección, D91), que decide el dueño, y las cuatro de las revisiones de las correcciones que piden una prueba o un aviso (`review-advisories.md`).
 - **La página del sitio** con la estructura del proyecto 01, en marca-personal, con las filas de `SITE-UPDATES.md` que el dueño apruebe.
 - **Lo que decide el dueño** (plan, sección 26): los costos supuestos (después del sello, un cambio es un análisis nuevo), el texto del sitio, el `.pbix`, el número de pedido en los Parquet (D32), si el sitio dice que los datos parecen generados, una API de puntuación con FastAPI, la estrategia de entrega de los PR, si el README instala el paquete en lugar de usar `PYTHONPATH`, y la línea de `AIRFLOW_UID` en `airflow/.env.example`.
 - **La corrida programada de Airflow sobre el archivo real**: Airflow se probó en Docker con la fuente sintética; la corrida real se hizo con la línea de comandos.
