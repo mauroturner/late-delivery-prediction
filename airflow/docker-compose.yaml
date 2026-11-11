@@ -1,0 +1,180 @@
+# Airflow 3.4.0 with the LocalExecutor, from the official docker-compose.yaml of that version
+# (https://airflow.apache.org/docs/apache-airflow/3.4.0/docker-compose.yaml) with these changes:
+#   - LocalExecutor: no redis, no celery worker and no flower (less memory; one task at a time anyway);
+#   - build the image of Dockerfile (Airflow plus the libraries of the pipeline, with the same == pins as the command
+#     line) from the project folder instead of using the plain one; only the airflow-init service has the `build` key (see there);
+#   - the DAGs are mounted read-only (./dags): no task can rewrite the file that defines the next one;
+#   - the project is mounted at /opt/latedel piece by piece: src/, sql/ and config/ read-only, and only data/, outputs/,
+#     reports/ and dashboard/ read-write; the pipeline reads it through PYTHONPATH, LATEDEL_HOME and LATEDEL_CONFIG;
+#   - the interface is published on 127.0.0.1 only, and every secret has no default and comes from the environment: the JWT
+#     secret, the Fernet key, the admin password and, new in this project (decision D23, what project 02 left pending in its
+#     D68), the password of the metadata database, in the PostgreSQL service and in the connection string of every Airflow
+#     service. The file refuses to start until .env (or the environment) sets them;
+#   - the external images are pinned by version and by digest (decision D23);
+#   - the example DAGs are off.
+# To run it: copy .env.example to .env and fill the four secrets (the file says how), then `docker compose build`,
+# `docker compose up airflow-init` and `docker compose up -d`; the interface is http://localhost:8080 (user airflow,
+# the password you set). It needs 4 GB of memory for Docker, 8 GB recommended.
+# The quick mode runs inside the container too: `LATEDEL_CONFIG=/opt/latedel/config/pipeline.quick.toml` and the fixture in
+# data/quick/ (docs/runbook.md, R12). A relative path of a configuration resolves against /opt/latedel (LATEDEL_HOME).
+
+# A project name of its own: the volume and the network never share a name with another Airflow compose project of this machine.
+name: latedel-airflow
+
+x-airflow-common:
+  &airflow-common
+  image: latedel-airflow:3.4.0
+  env_file:
+    - ${ENV_FILE_PATH:-.env}
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://airflow:${LATEDEL_DB_PASSWORD:?set LATEDEL_DB_PASSWORD in airflow/.env (see .env.example)}@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:?set FERNET_KEY in airflow/.env (see .env.example)}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?set AIRFLOW__API_AUTH__JWT_SECRET in airflow/.env (see .env.example)}
+    AIRFLOW__API_AUTH__JWT_ISSUER: ${AIRFLOW__API_AUTH__JWT_ISSUER:-airflow}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    PYTHONPATH: /opt/latedel/src
+    LATEDEL_HOME: /opt/latedel
+    LATEDEL_CONFIG: ${LATEDEL_CONFIG:-/opt/latedel/config/pipeline.toml}
+  volumes:
+    - ./dags:/opt/airflow/dags:ro
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+    - ./plugins:/opt/airflow/plugins
+    - ../src:/opt/latedel/src:ro
+    - ../sql:/opt/latedel/sql:ro
+    - ../config:/opt/latedel/config:ro
+    - ../data:/opt/latedel/data
+    - ../outputs:/opt/latedel/outputs
+    - ../reports:/opt/latedel/reports
+    - ../dashboard:/opt/latedel/dashboard
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16.9@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${LATEDEL_DB_PASSWORD:?set LATEDEL_DB_PASSWORD in airflow/.env (see .env.example)}
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    # The only service that builds the image (the others use its tag): five services building the same tag at once fail with
+    # `image "docker.io/library/latedel-airflow:3.4.0": already exists` on a cold cache, which the Docker test found (decision D74).
+    build:
+      context: ..
+      dockerfile: airflow/Dockerfile
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        /entrypoint airflow version
+        /entrypoint airflow config list >/dev/null
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,plugins,config}
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?set _AIRFLOW_WWW_USER_PASSWORD in airflow/.env (see .env.example)}
+    user: "0:0"
+
+  # `docker compose --profile debug run --rm airflow-cli airflow dags test latedel_monthly`
+  airflow-cli:
+    <<: *airflow-common
+    profiles:
+      - debug
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    command:
+      - bash
+      - -c
+      - airflow
+    depends_on:
+      <<: *airflow-common-depends-on
+
+volumes:
+  postgres-db-volume:
