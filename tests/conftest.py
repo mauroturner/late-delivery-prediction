@@ -54,6 +54,15 @@ def fixture_csv(fixture_truth) -> Path:
 
 
 @pytest.fixture(scope="session")
+def small_csv(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A valid synthetic CSV of 300 orders (seed 0), for the tests that change one cell or one row of the file and read the result: a defect in one row is found by the
+    same code whatever the size of the rest, and the 3000-order file costs ten times as much to read. Tests that count what the file holds use ``fixture_csv``."""
+    from tests.fixtures.make_fixture import make_fixture
+
+    return make_fixture(tmp_path_factory.mktemp("small_fixture") / "small_fixture.csv", n_orders=300, seed=0).path
+
+
+@pytest.fixture(scope="session")
 def malformed_bytes(fixture_csv: Path, tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], bytes]:
     """Factory: malformed_bytes(kind) -> the bytes of the valid fixture damaged in the given way, built once per session and kind."""
     from tests.fixtures.make_fixture import make_malformed
@@ -65,6 +74,34 @@ def malformed_bytes(fixture_csv: Path, tmp_path_factory: pytest.TempPathFactory)
         if kind not in cache:
             cache[kind] = make_malformed(fixture_csv, kind, folder / f"{kind}.csv").read_bytes()
         return cache[kind]
+
+    return build
+
+
+@pytest.fixture(scope="session")
+def rejection(cfg, malformed_bytes: Callable[[str], bytes], tmp_path_factory: pytest.TempPathFactory):
+    """Factory: ``rejection(kind, size_limit=None)`` -> the ``SourceError`` that reading the damaged fixture ``kind`` raises, read once per session and (kind, limit).
+
+    For the tests that only look at what the error says; the ones that look at what reading does to the file or the folder (nothing is written, the file is untouched)
+    still read it themselves.
+    """
+    import dataclasses
+
+    from latedel.ingest import read_source
+    from latedel.schema import SourceError
+
+    cache: dict[tuple[str, int | None], SourceError] = {}
+    folder = tmp_path_factory.mktemp("rejected")
+
+    def build(kind: str, size_limit: int | None = None) -> SourceError:
+        if (kind, size_limit) not in cache:
+            path = folder / f"{kind}.csv"
+            path.write_bytes(malformed_bytes(kind))
+            config = cfg if size_limit is None else dataclasses.replace(cfg, source=dataclasses.replace(cfg.source, max_bytes=size_limit))
+            with pytest.raises(SourceError) as error:
+                read_source(path, config)
+            cache[(kind, size_limit)] = error.value
+        return cache[(kind, size_limit)]
 
     return build
 
@@ -137,6 +174,52 @@ def launch_conn(launch_db: Path, tmp_path: Path):
     conn = connect(target)
     yield conn
     conn.close()
+
+
+@pytest.fixture(scope="session")
+def loaded_db(cfg, delivered, tmp_path_factory: pytest.TempPathFactory) -> Callable[[int], Path]:
+    """Factory: ``loaded_db(upto)`` -> a warehouse of the synthetic fixture with its first ``upto`` deliveries loaded through the runner, built once per ``upto``.
+
+    The file is a master that no test opens: tests that read or write it take a private copy with ``loaded_copy``. The tests of the load itself (what a failed check
+    leaves, what a repeated load changes, the content of two loads from scratch) still load for themselves.
+    """
+    from latedel.warehouse import connect
+    from tests.fixtures.helpers import load_through
+
+    built: dict[int, Path] = {}
+
+    def build(upto: int) -> Path:
+        if upto not in built:
+            path = tmp_path_factory.mktemp(f"loaded_{upto}") / "loaded.sqlite"
+            conn = connect(path)
+            load_through(conn, delivered, cfg, upto)
+            conn.close()
+            built[upto] = path
+        return built[upto]
+
+    return build
+
+
+@pytest.fixture()
+def loaded_copy(loaded_db: Callable[[int], Path], tmp_path: Path):
+    """Factory: ``loaded_copy(upto, name)`` -> a connection to a private copy, in this test's folder, of the warehouse with the first ``upto`` deliveries loaded.
+
+    The copy is made of the bytes of a warehouse that ``load_through`` produced, so it is the warehouse that loading from scratch would give; no test sees another one's writes.
+    """
+    from latedel.warehouse import connect
+
+    opened = []
+
+    def build(upto: int, name: str | None = None):
+        target = tmp_path / (name or f"loaded_{upto}_{len(opened)}.sqlite")
+        shutil.copyfile(loaded_db(upto), target)
+        conn = connect(target)
+        opened.append(conn)
+        return conn
+
+    yield build
+    for conn in opened:
+        conn.close()
 
 
 @pytest.fixture(scope="session")
@@ -374,6 +457,29 @@ def star_warehouse(history, tmp_path_factory: pytest.TempPathFactory):
         ))
     conn.close()
     return SimpleNamespace(cfg=cfg, db=db, folder=folder, plan=history.plan)
+
+
+@pytest.fixture(scope="session")
+def star_export(star_warehouse, tmp_path_factory: pytest.TempPathFactory):
+    """The star schema exported once per session from a copy of ``star_warehouse``: ``(conn, out_dir, paths)`` plus ``cfg``, ``db`` and ``meta``.
+
+    The Parquet files and the connection to the exported copy (its ``star_*`` tables are built) are for tests that only read: the tests of the star schema, of the HTML
+    design and of the site files. A test that damages a warehouse copies ``star_warehouse.db`` instead.
+    """
+    from types import SimpleNamespace
+
+    from latedel.dashboard.semantic_model import MODEL
+    from latedel.export import ExportMeta, export_star_schema
+    from latedel.warehouse import connect
+
+    folder = tmp_path_factory.mktemp("star")
+    db = folder / "wh.sqlite"
+    shutil.copy(star_warehouse.db, db)
+    conn = connect(db)
+    meta = ExportMeta(run_key="run-C2018-02", as_of="2018-02-07", source_sha256="ab" * 32)
+    paths = export_star_schema(conn, folder / "powerbi", MODEL, meta, star_warehouse.cfg)
+    yield SimpleNamespace(conn=conn, out_dir=folder / "powerbi", paths=paths, cfg=star_warehouse.cfg, db=db, meta=meta)
+    conn.close()
 
 
 @pytest.fixture()

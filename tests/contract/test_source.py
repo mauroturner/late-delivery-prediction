@@ -148,7 +148,7 @@ def test_benefit_and_profit_are_summed_and_averaged_per_order_in_the_outcomes_st
         assert outcomes.loc[order, "profit_ratio_mean"] == pytest.approx(sum(ratios[order]) / len(ratios[order]), abs=1e-9)
 
 
-def test_v13_counts_the_lines_whose_amounts_do_not_add_up_to_more_than_a_cent_and_a_half(cfg, fixture_csv, tmp_path):
+def test_v13_counts_the_lines_whose_amounts_do_not_add_up_to_more_than_a_cent_and_a_half(cfg, tmp_path, small_csv):
     def change(table):
         total = column("Order Item Total")
         table[2][total] = f"{float(table[2][total]) + 0.01:.2f}"     # one cent off: the source itself has gaps of up to 0.0100135
@@ -156,7 +156,7 @@ def test_v13_counts_the_lines_whose_amounts_do_not_add_up_to_more_than_a_cent_an
         sales = column("Sales")
         table[4][sales] = f"{float(table[4][sales]) + 1:.2f}"        # the sales no longer equal price times quantity: a discrepancy
 
-    _, report = read_source(edited(fixture_csv, tmp_path, change), cfg)
+    _, report = read_source(edited(small_csv, tmp_path, change), cfg)
     assert report.counts["V13"] == {"discrepancies": 2}
 
 
@@ -309,12 +309,12 @@ def test_v04_names_the_columns_that_differ(cfg, malformed):
     assert error.value.problems[0]["missing"] == ["Market"] and error.value.problems[0]["unexpected"] == ["Markets"]
 
 
-def test_v04_columns_in_another_order_and_an_empty_file(cfg, fixture_csv, tmp_path):
+def test_v04_columns_in_another_order_and_an_empty_file(cfg, tmp_path, small_csv):
     def swap(table):
         table[0][0], table[0][1] = table[0][1], table[0][0]
 
     with pytest.raises(SourceError, match=r"^V04:.*orden"):
-        read_source(edited(fixture_csv, tmp_path, swap), cfg)
+        read_source(edited(small_csv, tmp_path, swap), cfg)
     empty = tmp_path / "empty.csv"
     empty.write_bytes(b"")
     with pytest.raises(SourceError, match=r"^V04:.*vacío"):
@@ -356,16 +356,16 @@ def test_v05_a_short_row_and_a_date_that_does_not_convert_say_where(cfg, malform
     ("Order Id", "12a"),
     ("Product Price", "-"),
 ])
-def test_v05_every_value_that_does_not_convert_is_refused(cfg, fixture_csv, tmp_path, name, value):
+def test_v05_every_value_that_does_not_convert_is_refused(cfg, tmp_path, name, value, small_csv):
     def change(table):
         table[7][column(name)] = value
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_csv, tmp_path, change), cfg)
     assert error.value.rule_id == "V05" and error.value.problems[0]["column"] == name
 
 
-def test_v05_a_value_in_a_personal_column_is_refused_without_being_echoed(cfg, fixture_csv, tmp_path):
+def test_v05_a_value_in_a_personal_column_is_refused_without_being_echoed(cfg, tmp_path, small_csv):
     secret = "12 Private Street, Springfield"
 
     def change(table):
@@ -373,18 +373,18 @@ def test_v05_a_value_in_a_personal_column_is_refused_without_being_echoed(cfg, f
         table[4][column("Customer Id")] = secret
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_csv, tmp_path, change), cfg)
     assert error.value.rule_id == "V05"
     assert secret not in str(error.value) and "Private" not in repr(error.value.problems)
     assert {p["column"] for p in error.value.problems} == {"Latitude", "Customer Id"}
 
 
-def test_v05_a_field_over_the_csv_limit_and_a_stray_quote_are_rows_that_do_not_parse(cfg, fixture_csv, tmp_path):
+def test_v05_a_field_over_the_csv_limit_and_a_stray_quote_are_rows_that_do_not_parse(cfg, fixture_csv, tmp_path, small_csv):
     def long_field(table):
         table[9][column("Product Name")] = "x" * 140_000
 
     with pytest.raises(SourceError, match=r"^V05:.*campo"):
-        read_source(edited(fixture_csv, tmp_path, long_field, "long.csv"), cfg)
+        read_source(edited(small_csv, tmp_path, long_field, "long.csv"), cfg)
     raw = fixture_csv.read_bytes()
     broken = raw.replace(b"Consumer", b'"Cons"umer', 1)
     path = tmp_path / "quote.csv"
@@ -485,13 +485,13 @@ def test_v09_follows_the_purge_days_of_the_configuration(cfg, fixture_csv, fixtu
         read_source(fixture_csv, tighter)
 
 
-def test_the_first_rule_that_fails_is_the_one_reported(cfg, fixture_csv, tmp_path):
+def test_the_first_rule_that_fails_is_the_one_reported(cfg, tmp_path, small_csv):
     def change(table):
         table[10][column("Customer Email")] = "a@b.c"                               # V06
         table[12][column("Shipping Mode")] = "First Class" if table[12][column("Shipping Mode")] != "First Class" else "Same Day"  # V07 if it shares an order
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_csv, tmp_path, change), cfg)
     assert error.value.rule_id == "V06"
 
     def worse(table):
@@ -499,18 +499,16 @@ def test_the_first_rule_that_fails_is_the_one_reported(cfg, fixture_csv, tmp_pat
         table[11].pop()                                                             # V05 outranks V06
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, worse, "worse.csv"), cfg)
+        read_source(edited(small_csv, tmp_path, worse, "worse.csv"), cfg)
     assert error.value.rule_id == "V05"
 
 
-def test_messages_never_carry_a_sentinel_whatever_the_variant(cfg, fixture_truth, malformed):
-    limited = with_limit(cfg, fixture_truth.size_bytes + 1000)
+def test_messages_never_carry_a_sentinel_whatever_the_variant(fixture_truth, rejection):
     for kind in MALFORMED_KINDS:
         if kind == "wrong_hash":
             continue
-        with pytest.raises(SourceError) as error:
-            read_source(malformed(kind), limited if kind == "oversize" else cfg)
-        text = str(error.value) + repr(error.value.problems)
+        error = rejection(kind, fixture_truth.size_bytes + 1000 if kind == "oversize" else None)
+        text = str(error) + repr(error.problems)
         assert not any(needle.decode() in text for needle in fixture_truth.sentinel_needles), kind
 
 

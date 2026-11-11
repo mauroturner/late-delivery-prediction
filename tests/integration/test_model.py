@@ -82,14 +82,12 @@ def test_the_planted_effect_shows_in_the_importance_and_the_absent_one_does_not(
     assert negative["order_hour"] > 0.01, "the noon cut is there in both"
 
 
-def test_two_trainings_choose_the_same_configuration_and_give_identical_probabilities(control_run):
+def test_two_trainings_choose_the_same_configuration_and_give_identical_probabilities(control_run, controls):
     control = control_run("standard_market")
-    runs = []
-    for _ in range(2):
-        conn = connect(control.launch_db)
-        runs.append(train_model(conn, control.cfg.deliveries.launch_date, control.cfg))
-        conn.close()
-    a, b = runs
+    conn = connect(control.launch_db)
+    b = train_model(conn, control.cfg.deliveries.launch_date, control.cfg)
+    conn.close()
+    a = controls["standard_market"]["trained"]            # the training of the controls fixture: the same warehouse and configuration, trained earlier in this module
     assert a.selection.chosen == b.selection.chosen and a.selection.losses == b.selection.losses
     pd.testing.assert_frame_equal(a.valid_v2, b.valid_v2, check_exact=True)
     np.testing.assert_array_equal(predict_risk(a.model, a.x_v2), predict_risk(b.model, b.x_v2))

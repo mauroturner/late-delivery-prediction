@@ -143,7 +143,7 @@ def test_v10_counts_the_orders_whose_scheduled_days_are_not_those_of_their_mode_
     assert len(table) > 0
 
 
-def test_v12_counts_the_lines_and_the_orders_with_a_repeated_column_that_differs_not_the_cells(cfg, fixture_csv, tmp_path):
+def test_v12_counts_the_lines_and_the_orders_with_a_repeated_column_that_differs_not_the_cells(cfg, tmp_path, small_csv):
     seen: dict[str, int] = {}
 
     def change(t):
@@ -154,7 +154,7 @@ def test_v12_counts_the_lines_and_the_orders_with_a_repeated_column_that_differs
         t[two][column("Product Category Id")] = str(int(t[two][column("Product Category Id")]) + 1)
         seen.update(one=int(order_of(t, one)), two=int(order_of(t, two)))
 
-    path = edited(fixture_csv, tmp_path, change)
+    path = edited(small_csv, tmp_path, change)
     _, source_report = read_source(path, cfg)
     assert source_report.counts["V12"]["discrepancies"] == 3, "three cells differ"
     v12 = by_id(validate_source(source_report, run_key="r"))["V12"]
@@ -163,7 +163,7 @@ def test_v12_counts_the_lines_and_the_orders_with_a_repeated_column_that_differs
     assert seen
 
 
-def test_v13_counts_the_lines_and_the_orders_whose_amounts_do_not_add_up(cfg, fixture_csv, tmp_path):
+def test_v13_counts_the_lines_and_the_orders_whose_amounts_do_not_add_up(cfg, tmp_path, small_csv):
     orders: list[str] = []
 
     def change(t):
@@ -173,7 +173,7 @@ def test_v13_counts_the_lines_and_the_orders_whose_amounts_do_not_add_up(cfg, fi
         t[40][sales] = f"{float(t[40][sales]) + 1:.2f}"        # sales no longer price times quantity: a discrepancy
         orders.extend({order_of(t, 3), order_of(t, 40)})
 
-    path = edited(fixture_csv, tmp_path, change)
+    path = edited(small_csv, tmp_path, change)
     _, source_report = read_source(path, cfg)
     v13 = by_id(validate_source(source_report, run_key="r"))["V13"]
     assert (v13.severity, v13.passed, v13.rows_affected, v13.orders_affected) == (Severity.WARNING, False, 2, len(set(orders)))
@@ -184,8 +184,8 @@ def test_v13_counts_the_lines_and_the_orders_whose_amounts_do_not_add_up(cfg, fi
 
 
 @pytest.mark.parametrize("kind", [k for k in MALFORMED_KINDS if k != "wrong_hash"])
-def test_each_malformed_variant_fails_its_rule_and_leaves_the_rest_not_evaluated(cfg, fixture_truth, malformed, kind):
-    error = failure(cfg, malformed(kind), size_limit=fixture_truth.size_bytes + 100_000)
+def test_each_malformed_variant_fails_its_rule_and_leaves_the_rest_not_evaluated(fixture_truth, rejection, kind):
+    error = rejection(kind, fixture_truth.size_bytes + 100_000)
     rule = MALFORMED_RULES[kind]
     assert error.rule_id == rule
     report = validate_source(error, run_key="r", source_sha256=SHA)
@@ -225,8 +225,8 @@ def test_a_file_that_is_too_big_is_v02_after_v01_passed(cfg, fixture_csv):
     ("short_row", 1, 0), ("bad_date", 1, 0), ("unmasked_email", 1, 0), ("unmasked_password", 1, 0), ("duplicate_item_id", 1, 0),
     ("two_modes_one_order", 0, 1), ("label_mismatch", 0, 1), ("outcome_after_7_days", 0, 1),
 ])
-def test_a_failing_rule_counts_its_rows_or_its_orders(cfg, malformed, fixture_truth, kind, rows, orders):
-    error = failure(cfg, malformed(kind))
+def test_a_failing_rule_counts_its_rows_or_its_orders(rejection, kind, rows, orders):
+    error = rejection(kind)
     result = by_id(validate_source(error, run_key="r"))[MALFORMED_RULES[kind]]
     assert (result.rows_affected, result.orders_affected) == (rows, orders)
 
@@ -237,11 +237,11 @@ def test_only_a_blocking_rule_of_the_source_can_be_the_cause_of_a_rejection():
             validate_source(SourceError(rule_id, "x"), run_key="r")
 
 
-def test_the_examples_of_a_problem_are_clean_and_short(cfg, fixture_csv, tmp_path):
+def test_the_examples_of_a_problem_are_clean_and_short(cfg, tmp_path, small_csv):
     def change(t):
         t[7][column("order date (DateOrders)")] = "x" * 5000 + "\u0007"
 
-    error = failure(cfg, edited(fixture_csv, tmp_path, change))
+    error = failure(cfg, edited(small_csv, tmp_path, change))
     examples = by_id(validate_source(error, run_key="r"))["V05"].examples
     shown = json.dumps(examples)
     assert "x" * 100 not in shown and "\\u0007" not in shown and max(len(str(v)) for e in examples for v in e.values()) < 200
@@ -267,17 +267,17 @@ def test_the_report_files_say_the_verdict_the_rules_and_the_counts(fixture_read,
     assert (tmp_path / "history" / "L2017-01-07.json").read_text(encoding="utf-8") == latest_json.read_text(encoding="utf-8")
 
 
-def test_a_rejected_source_report_says_rechazado_and_which_rules_were_not_evaluated(cfg, malformed, tmp_path):
-    report = validate_source(failure(cfg, malformed("label_mismatch")), run_key="r9")
+def test_a_rejected_source_report_says_rechazado_and_which_rules_were_not_evaluated(rejection, tmp_path):
+    report = validate_source(rejection("label_mismatch"), run_key="r9")
     _, latest_md = write_report(report, tmp_path)
     markdown = latest_md.read_text(encoding="utf-8")
     assert "Rechazado" in markdown and "## No evaluadas" in markdown and "V09" in markdown.split("## No evaluadas")[1] and "| V08 |" in markdown
     assert json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))["blocking_failed"] is True
 
 
-def test_a_report_read_back_is_the_report_that_was_written(fixture_read, cfg, malformed, tmp_path):
+def test_a_report_read_back_is_the_report_that_was_written(fixture_read, rejection, tmp_path):
     for number, report in enumerate((validate_source(fixture_read[1], run_key="r1", source_sha256=SHA),
-                                     validate_source(failure(cfg, malformed("short_row")), run_key="r2"))):
+                                     validate_source(rejection("short_row"), run_key="r2"))):
         write_report(report, tmp_path / str(number))
         assert read_report(tmp_path / str(number) / "latest.json") == report
         assert read_report(tmp_path / str(number) / "history" / f"r{number + 1}.json") == report
@@ -298,13 +298,13 @@ def test_writing_a_report_twice_gives_the_same_bytes_and_a_failure_writes_nothin
 
 
 @pytest.mark.parametrize("kind", [None, "unmasked_email", "unmasked_password", "short_row", "two_modes_one_order", "invalid_cp1252_byte", "wrong_hash"])
-def test_no_report_carries_a_personal_value_a_sentinel_or_a_path_of_this_machine(cfg, fixture_read, fixture_truth, fixture_csv, malformed, tmp_path, kind):
+def test_no_report_carries_a_personal_value_a_sentinel_or_a_path_of_this_machine(fixture_read, fixture_truth, fixture_csv, rejection, tmp_path, kind):
     if kind is None:
         report = validate_source(fixture_read[1], run_key="r1", source_sha256=SHA)
     elif kind == "wrong_hash":
         report = validate_source(_rejected(fixture_csv, "aceptada", "cd" * 32, "ab" * 32), run_key="r1")
     else:
-        report = validate_source(failure(cfg, malformed(kind)), run_key="r1")
+        report = validate_source(rejection(kind), run_key="r1")
     out = tmp_path / "report"
     write_report(report, out)
     blob = b"".join(p.read_bytes() for p in out.rglob("*") if p.is_file())
@@ -315,10 +315,10 @@ def test_no_report_carries_a_personal_value_a_sentinel_or_a_path_of_this_machine
         assert forbidden not in blob
 
 
-def test_validating_logs_the_verdict_and_never_a_value(fixture_read, cfg, malformed, caplog, fixture_truth):
+def test_validating_logs_the_verdict_and_never_a_value(fixture_read, rejection, caplog, fixture_truth):
     with caplog.at_level(logging.INFO, logger="latedel.validate"):
         validate_source(fixture_read[1], run_key="r1")
-        validate_source(failure(cfg, malformed("unmasked_email")), run_key="r2")
+        validate_source(rejection("unmasked_email"), run_key="r2")
     messages = [r.getMessage() for r in caplog.records if r.name == "latedel.validate"]
     assert any("r1" in m and "accepted" in m for m in messages) and any("r2" in m and "rejected" in m and "V06" in m for m in messages)
     assert not any("ann.smith" in m for m in messages)

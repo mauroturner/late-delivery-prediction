@@ -84,9 +84,8 @@ def violating(conn, cfg, as_of: date) -> dict[str, int]:
 
 
 @pytest.mark.parametrize("as_of", [date(2017, 1, 7), date(2017, 1, 20), date(2017, 3, 31), date(2017, 10, 7), date(2018, 2, 7)])
-def test_labelled_orders_at_as_of_exclude_later_outcomes(cfg, delivered, fixture_read, tmp_path, as_of):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)                  # the warehouse holds everything: the date alone decides what is labelled
+def test_labelled_orders_at_as_of_exclude_later_outcomes(cfg, fixture_read, as_of, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")                  # the warehouse holds everything: the date alone decides what is labelled
     rebuild_at(conn, as_of, cfg)
     frames = fixture_read[0]
     merged = frames.orders.merge(frames.outcomes, on="order_id")
@@ -104,9 +103,8 @@ def test_labelled_orders_at_as_of_exclude_later_outcomes(cfg, delivered, fixture
     assert mart.columns.tolist() == ["order_id", "order_ts", "order_date", "regime", "shipping_mode", "scheduled_days", "outcome_known_date", "is_late", "block"]
 
 
-def test_the_date_changes_the_labels_known_for_orders_already_in_the_warehouse(cfg, delivered, fixture_read, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)
+def test_the_date_changes_the_labels_known_for_orders_already_in_the_warehouse(cfg, fixture_read, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")
     frames = fixture_read[0]
     merged = frames.orders.merge(frames.outcomes, on="order_id")
     pending = merged[(~merged["is_cancelled"]) & (merged["order_date"] <= pd.Timestamp("2017-03-15")) & (merged["outcome_known_date"] > pd.Timestamp("2017-03-15"))]
@@ -119,9 +117,8 @@ def test_the_date_changes_the_labels_known_for_orders_already_in_the_warehouse(c
     assert conn.execute("SELECT COUNT(*) FROM mart_labelled_orders WHERE order_id = ?", (order,)).fetchone()[0] == 1
 
 
-def test_every_label_of_the_training_block_is_known_before_the_validation_and_every_validation_label_before_the_launch(cfg, delivered, fixture_read, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 1)                   # the launch: the test block does not exist in the warehouse yet
+def test_every_label_of_the_training_block_is_known_before_the_validation_and_every_validation_label_before_the_launch(cfg, fixture_read, loaded_copy):
+    conn = loaded_copy(1, "w.sqlite")                   # the launch: the test block does not exist in the warehouse yet
     mart = pd.read_sql_query("SELECT * FROM mart_labelled_orders", conn)
     s = cfg.split
     assert set(mart["block"]) <= {"train", "purge_1", "valid_v1", "valid_v2", "purge_2"}
@@ -181,9 +178,8 @@ def test_the_main_line_is_the_one_with_the_most_sales_and_the_lowest_id_on_a_tie
     assert conn.execute("SELECT order_id, line_id, sales FROM mart_main_line ORDER BY order_id").fetchall() == [(1, 4, 30.0), (2, 7, 3.5), (3, 20, 5.0)]
 
 
-def test_the_main_line_of_every_order_of_the_fixture_matches_an_independent_computation(cfg, delivered, fixture_read, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)
+def test_the_main_line_of_every_order_of_the_fixture_matches_an_independent_computation(cfg, fixture_read, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")
     lines = fixture_read[0].order_lines.sort_values(["order_id", "sales", "line_id"], ascending=[True, False, True])
     expected = lines.groupby("order_id").head(1).sort_values("order_id")
     mart = pd.read_sql_query("SELECT order_id, line_id, department_name, category_name, product_name FROM mart_main_line ORDER BY order_id", conn)
@@ -330,9 +326,8 @@ def test_a_load_whose_marts_break_a_control_is_undone_with_the_rest(cfg, deliver
 # --- rebuilding for a date leaves the raw tables alone and is idempotent ----------------------------------------------------------------------
 
 
-def test_rebuilding_for_a_date_is_idempotent_and_never_touches_the_raw_tables(cfg, delivered, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)
+def test_rebuilding_for_a_date_is_idempotent_and_never_touches_the_raw_tables(cfg, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")
     raw = {t: conn.execute(f"SELECT * FROM {t} ORDER BY 1").fetchall() for t in ("raw_orders", "raw_order_lines", "raw_outcomes", "deliveries")}
     rebuild_at(conn, date(2017, 5, 31), cfg)
     first = {t: conn.execute(f"SELECT * FROM {t} ORDER BY 1").fetchall() for t in ("stg_orders", "stg_outcomes", "mart_labelled_orders", "mart_main_line")}

@@ -127,9 +127,8 @@ def test_every_delivery_loads_with_its_rows_and_is_recorded(cfg, delivered, tmp_
     assert totals["orders"] == totals["outcomes"] == 3000 and conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 15
 
 
-def test_the_raw_tables_hold_the_values_of_the_frames(cfg, delivered, fixture_read, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)
+def test_the_raw_tables_hold_the_values_of_the_frames(cfg, fixture_read, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")
     frames = fixture_read[0]
     orders = pd.read_sql_query("SELECT * FROM raw_orders ORDER BY order_id", conn).drop(columns="delivery_id")
     expected = frames.orders.copy()
@@ -234,9 +233,8 @@ def test_staging_is_rebuilt_by_each_load_and_never_keeps_an_older_date(cfg, deli
 
 
 @pytest.mark.parametrize("as_of", [date(2017, 1, 7), date(2017, 2, 15), date(2017, 3, 31)])
-def test_the_staging_files_filter_by_the_date_they_are_given_whatever_the_warehouse_holds(cfg, delivered, fixture_read, tmp_path, as_of):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)          # everything is loaded; the staging is rebuilt for an earlier date
+def test_the_staging_files_filter_by_the_date_they_are_given_whatever_the_warehouse_holds(cfg, fixture_read, as_of, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")          # everything is loaded; the staging is rebuilt for an earlier date
     conn.execute("BEGIN IMMEDIATE")
     for name in warehouse.STAGING:
         run_sql_file(conn, warehouse.SQL_DIR / name, warehouse.sql_params(cfg, as_of))
@@ -265,11 +263,8 @@ def test_the_staging_tables_of_the_orders_have_no_outcome_column(cfg, delivered,
 # --- no personal data in the file (AC04) ------------------------------------------------------------------------------------------------------------------
 
 
-def test_no_personal_column_or_sentinel_in_the_warehouse_file(cfg, delivered, fixture_truth, tmp_path):
-    path = tmp_path / "w.sqlite"
-    conn = connect(path)
-    load_through(conn, delivered, cfg, 15)
-    conn.close()
+def test_no_personal_column_or_sentinel_in_the_warehouse_file(fixture_truth, loaded_db):
+    path = loaded_db(15)                                  # the file the runner wrote for the 15 deliveries; this test only reads it
     blob = path.read_bytes()
     assert all(needle not in blob for needle in fixture_truth.sentinel_needles)
     tables = {row[0] for row in sqlite3.connect(path).execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

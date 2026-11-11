@@ -48,15 +48,10 @@ PLANNED = [
 
 
 @pytest.fixture(scope="module")
-def star(star_warehouse, tmp_path_factory):
-    """The Parquet files exported from a copy of the warehouse, and the connection to that copy."""
-    folder = tmp_path_factory.mktemp("star")
-    path = folder / "wh.sqlite"
-    shutil.copy(star_warehouse.db, path)
-    conn = connect(path)
-    paths = export_star_schema(conn, folder / "powerbi", MODEL, META, star_warehouse.cfg)
-    yield conn, folder / "powerbi", paths
-    conn.close()
+def star(star_export):
+    """The Parquet files exported from a copy of the warehouse (once per session, ``star_export``), and the connection to that copy."""
+    assert star_export.meta == META
+    return star_export.conn, star_export.out_dir, star_export.paths
 
 
 @pytest.fixture(scope="module")

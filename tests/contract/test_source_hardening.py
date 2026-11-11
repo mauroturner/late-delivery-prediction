@@ -62,12 +62,12 @@ def many_rows(fixture_csv: Path, tmp_path: Path, count: int, damage, name: str =
 
 @pytest.mark.parametrize("name", DAY_COLUMNS)
 @pytest.mark.parametrize("value", ["-1", "-0", "-30", "-99999"])
-def test_a_negative_day_count_is_refused_by_v05_naming_the_column_the_line_and_what_is_wrong(cfg, fixture_csv, tmp_path, name, value):
+def test_a_negative_day_count_is_refused_by_v05_naming_the_column_the_line_and_what_is_wrong(cfg, tmp_path, name, value, small_csv):
     def change(table):
         table[9][column(name)] = value
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_csv, tmp_path, change), cfg)
     assert error.value.rule_id == "V05"
     message = str(error.value)
     assert name in message and "negativ" in message and "línea 10" in message and value in message
@@ -81,7 +81,7 @@ def test_zero_and_positive_day_counts_still_pass_and_other_negative_numbers_are_
     assert (outcomes["benefit_total"] < 0).any(), "a negative benefit is a valid number: only the day counts must not be negative"
 
 
-def test_several_negative_day_counts_are_counted_together_with_the_other_problems_of_v05(cfg, fixture_csv, tmp_path):
+def test_several_negative_day_counts_are_counted_together_with_the_other_problems_of_v05(cfg, tmp_path, small_csv):
     def change(table):
         table[4][column(DAY_COLUMNS[0])] = "-2"
         table[6][column(DAY_COLUMNS[0])] = "-3"
@@ -89,7 +89,7 @@ def test_several_negative_day_counts_are_counted_together_with_the_other_problem
         table[10][column("order date (DateOrders)")] = "13/45/2017 99:99"
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_csv, tmp_path, change), cfg)
     found = {(p["kind"], p["column"]): p["count"] for p in error.value.problems}
     assert found == {("negative", DAY_COLUMNS[0]): 2, ("negative", DAY_COLUMNS[1]): 1, ("column", "order date (DateOrders)"): 1}
     assert "2 valor(es) negativo(s)" in str(error.value)

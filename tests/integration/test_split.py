@@ -71,10 +71,9 @@ def test_a_mart_built_for_an_earlier_date_is_refused_not_read(cfg, launch_conn):
     assert len(labelled_orders(launch_conn, cfg.deliveries.launch_date, cfg)) > 0
 
 
-def test_a_mart_built_for_a_later_date_is_cut_back_to_the_date_asked_for(cfg, delivered, launch_conn, tmp_path):
+def test_a_mart_built_for_a_later_date_is_cut_back_to_the_date_asked_for(cfg, launch_conn, loaded_copy):
     expected = labelled_orders(launch_conn, cfg.deliveries.launch_date, cfg)
-    conn = connect(tmp_path / "full.sqlite")
-    load_through(conn, delivered, cfg, 15)               # the mart now holds the test block and the labels known up to 2018-02-07
+    conn = loaded_copy(15, "full.sqlite")               # the mart now holds the test block and the labels known up to 2018-02-07
     assert conn.execute("SELECT COUNT(*) FROM mart_labelled_orders WHERE block = 'test'").fetchone()[0] > 0
     cut = labelled_orders(conn, cfg.deliveries.launch_date, cfg)
     pd.testing.assert_frame_equal(cut, expected, check_exact=True)

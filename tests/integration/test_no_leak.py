@@ -8,6 +8,7 @@ of (3) join this file with the units that make them: the model and its calibrati
 
 from __future__ import annotations
 
+import shutil
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
@@ -90,9 +91,8 @@ PERTURB = (
 )
 
 
-def test_perturbing_every_outcome_in_the_warehouse_changes_no_feature(cfg, delivered, tmp_path):
-    conn = connect(tmp_path / "w.sqlite")
-    load_through(conn, delivered, cfg, 15)
+def test_perturbing_every_outcome_in_the_warehouse_changes_no_feature(cfg, delivered, loaded_copy):
+    conn = loaded_copy(15, "w.sqlite")
     last = delivered[1][-1].as_of
     before = matrices(conn)
     labels = conn.execute("SELECT SUM(is_late), COUNT(*) FROM stg_outcomes").fetchone()
@@ -141,12 +141,10 @@ def tamper_after(conn, day: date) -> dict[str, int]:
 
 
 @pytest.mark.parametrize("upto", [4, 5, 9])
-def test_unknown_outcomes_and_later_orders_change_nothing_at_as_of(cfg, delivered, tmp_path, upto):
+def test_unknown_outcomes_and_later_orders_change_nothing_at_as_of(cfg, delivered, upto, loaded_copy):
     as_of = delivered[1][upto - 1].as_of
-    clean = connect(tmp_path / "clean.sqlite")
-    load_through(clean, delivered, cfg, upto)                         # the warehouse as it was on the date
-    messy = connect(tmp_path / "messy.sqlite")
-    load_through(messy, delivered, cfg, 15)                           # the warehouse today, with everything that happened later
+    clean = loaded_copy(upto, "clean.sqlite")                         # the warehouse as it was on the date
+    messy = loaded_copy(15, "messy.sqlite")                           # the warehouse today, with everything that happened later
     done = tamper_after(messy, as_of)
     assert done["deleted"] > 20 and done["changed"] > 40 and done["unknown_outcomes"] > 0 and messy.execute("SELECT COUNT(*) FROM raw_orders").fetchone()[0] != 3000
     rebuild_at(messy, as_of, cfg)
@@ -156,12 +154,10 @@ def test_unknown_outcomes_and_later_orders_change_nothing_at_as_of(cfg, delivere
     assert messy.execute("SELECT COUNT(*) FROM stg_orders WHERE order_id >= 900000").fetchone()[0] == 0
 
 
-def test_the_same_tampering_does_change_the_variables_when_the_date_is_the_last_one(cfg, delivered, tmp_path):
+def test_the_same_tampering_does_change_the_variables_when_the_date_is_the_last_one(cfg, delivered, loaded_copy):
     """The control of the probe above: the tampering does change what is computed when the date lets it in, so the equality of the probe is not trivial."""
-    clean = connect(tmp_path / "clean.sqlite")
-    load_through(clean, delivered, cfg, 5)
-    messy = connect(tmp_path / "messy.sqlite")
-    load_through(messy, delivered, cfg, 15)
+    clean = loaded_copy(5, "clean.sqlite")
+    messy = loaded_copy(15, "messy.sqlite")
     tamper_after(messy, delivered[1][4].as_of)
     rebuild_at(messy, delivered[1][-1].as_of, cfg)
     assert messy.execute("SELECT COUNT(*) FROM stg_orders").fetchone()[0] > clean.execute("SELECT COUNT(*) FROM stg_orders").fetchone()[0]
@@ -177,15 +173,15 @@ def trained_at(conn, as_of, cfg):
 
 
 @pytest.fixture(scope="module")
-def launch_pair(cfg, delivered, tmp_path_factory):
+def launch_pair(cfg, delivered, loaded_db, tmp_path_factory):
     """The warehouse as it was at the launch (`clean`) and the one of today with everything later altered (`messy`), each with the model trained for the launch."""
     config = small_cfg(cfg)
     as_of = delivered[1][0].as_of                                     # the launch: the date at which the model is trained
     folder = tmp_path_factory.mktemp("launch_pair")
+    shutil.copyfile(loaded_db(1), folder / "clean.sqlite")            # the warehouse as it was on the date
     clean = connect(folder / "clean.sqlite")
-    load_through(clean, delivered, config, 1)                         # the warehouse as it was on the date
+    shutil.copyfile(loaded_db(15), folder / "messy.sqlite")           # the warehouse today, with everything that happened later
     messy = connect(folder / "messy.sqlite")
-    load_through(messy, delivered, config, 15)                        # the warehouse today, with everything that happened later
     done = tamper_after(messy, as_of)
     assert done["deleted"] > 20 and done["unknown_outcomes"] > 0
     yield SimpleNamespace(config=config, as_of=as_of, clean=clean, messy=messy, a=trained_at(clean, as_of, config), b=trained_at(messy, as_of, config))
@@ -221,19 +217,16 @@ def test_the_threshold_and_the_sensitivity_of_a_date_do_not_depend_on_later_data
     pd.testing.assert_frame_equal(tables[0], tables[1], check_exact=True)
 
 
-def test_changing_a_label_that_is_known_on_the_date_does_change_the_model_and_the_threshold(cfg, delivered, tmp_path):
+def test_changing_a_label_that_is_known_on_the_date_does_change_the_model_and_the_threshold(cfg, delivered, launch_pair, loaded_copy):
     """The control of the probes above: what the date does let in moves the model and the threshold, so their equality is not trivial."""
     config = small_cfg(cfg)
     as_of = delivered[1][0].as_of
-    clean = connect(tmp_path / "clean.sqlite")
-    load_through(clean, delivered, config, 1)
-    changed = connect(tmp_path / "changed.sqlite")
-    load_through(changed, delivered, config, 1)
+    changed = loaded_copy(1, "changed.sqlite")
     flipped = changed.execute(
         "UPDATE raw_outcomes SET real_days = CASE WHEN real_days > (SELECT scheduled_days FROM raw_orders o WHERE o.order_id = raw_outcomes.order_id) THEN 0 ELSE 6 END, "
         "source_label = 1 - source_label WHERE is_cancelled = 0 AND order_id IN (SELECT order_id FROM raw_orders WHERE order_date BETWEEN '2016-07-08' AND '2016-09-30')").rowcount
     assert flipped > 100
-    a, b = trained_at(clean, as_of, config), trained_at(changed, as_of, config)
+    a, b = launch_pair.a, trained_at(changed, as_of, config)      # `a`: the model of the untouched launch warehouse, which the fixture trained with this very configuration
     assert a.selection.losses != b.selection.losses and not a.valid_v2["risk"].equals(b.valid_v2["risk"])
     # the labels of V2 alone (the model is the same) move the threshold
     flipped_v2 = changed.execute(
@@ -244,14 +237,12 @@ def test_changing_a_label_that_is_known_on_the_date_does_change_the_model_and_th
     assert v2_threshold(c.valid_v2, config) != v2_threshold(b.valid_v2, config)
 
 
-def test_the_scores_and_flags_of_a_date_do_not_depend_on_later_data(delivered, launch_pair, tmp_path):
+def test_the_scores_and_flags_of_a_date_do_not_depend_on_later_data(delivered, launch_pair, loaded_copy):
     config = launch_pair.config
     model, threshold = launch_pair.a.model, v2_threshold(launch_pair.a.valid_v2, config).threshold      # the model frozen at the launch
     spec = delivered[1][1]                                                                              # the delivery of January 2017
-    clean = connect(tmp_path / "clean.sqlite")
-    load_through(clean, delivered, config, 2)                         # the warehouse as it was on the date
-    messy = connect(tmp_path / "messy.sqlite")
-    load_through(messy, delivered, config, 15)                        # the warehouse today, with everything that happened later
+    clean = loaded_copy(2, "clean.sqlite")                         # the warehouse as it was on the date
+    messy = loaded_copy(15, "messy.sqlite")                        # the warehouse today, with everything that happened later
     done = tamper_after(messy, spec.as_of)
     assert done["deleted"] > 20 and done["changed"] > 40 and done["unknown_outcomes"] > 0
     rebuild_at(messy, spec.as_of, config)
@@ -262,8 +253,7 @@ def test_the_scores_and_flags_of_a_date_do_not_depend_on_later_data(delivered, l
     assert a.scored == b.scored > 50 and a.alerts == b.alerts
     assert clean.execute(query).fetchall() == messy.execute(query).fetchall(), "every risk and every flag of the date, exactly"
     # the control: what the date does let in (the variables of the orders of the delivery themselves) moves the scores
-    changed = connect(tmp_path / "changed.sqlite")
-    load_through(changed, delivered, config, 2)
+    changed = loaded_copy(2, "changed.sqlite")
     changed.execute("UPDATE raw_orders SET shipping_mode = 'Same Day', order_ts = substr(order_ts, 1, 11) || '15:00' WHERE delivery_id = ?", (spec.delivery_id,))
     rebuild_at(changed, spec.as_of, config)
     score_new_orders(changed, spec.delivery_id, model, threshold, meta)
