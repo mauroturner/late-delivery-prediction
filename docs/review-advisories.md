@@ -450,6 +450,15 @@ La comprobación (`docs/evaluation.md`, sección «Comprobación») cerró B1 a 
 - **Una comprobación del sello más estricta** (informativo): desde D88, `report` lee el sello en cada corrida de una repetición desde cero; un sello cuya parte de la prueba no devuelve sus propios criterios falla en el lanzamiento con `SealError` («no da su propio C01/C07»), donde `eef9bea` fallaba en M2017-10.
   - Resolución: **aceptado sin cambio**. Falla del lado seguro, D88 lo declara y la comprobación no pidió corrección; el hallazgo `R3-seal-mismatch-untested` pide la prueba de esa rama.
 
+## Lectura de I02 e I04 en el archivo del sitio (`0d1d3ed..153e1c2`, approved, 2 hallazgos)
+
+La revisión nativa de `153e1c2` (D94; ítem 3, un archivo que el sitio consume; riesgo y confiabilidad) aprobó y se reconoció con dos hallazgos.
+
+- **R3-001** (`tests/contract/test_site_export.py`, líneas 560-562; advertencia): la prueba de contrato fija la lectura única de I02, pero no la de I04, que `READ_ONCE_MODEL_RULES` trata igual; I04 solo lo cubre la prueba `real_data`.
+  - Resolución: **aceptado sin cambio**. El almacén del accesorio no registra I04 en ninguna corrida, así que a ese nivel no hay un valor que leer una vez ni sumar; `tests/e2e/test_real.py::test_real_counts_seal_and_summary_consistency` compara I04 con `alerts.json` sobre el almacén real, y las dos reglas pasan por la misma línea de `_validation`.
+- **R3-002** (`src/latedel/site_export.py`, línea 273; sugerencia): las dos reglas están escritas a mano en `READ_ONCE_MODEL_RULES` en lugar de salir de una propiedad de la regla, y una regla nueva del modelo con el mismo seguimiento acumulado se podría olvidar.
+  - Resolución: **aceptado sin cambio**. I02 e I04 son las únicas que produce `tracking_rules`, el único paso que cuenta el seguimiento hasta la fecha; la docstring de `_validation` y D94 dicen por qué, y la prueba `real_data` compararía con `alerts.json` cualquier cifra del seguimiento que se agregue a esas filas.
+
 ## Para el runbook (U27)
 
 Lo que el runbook debe decir a partir de estas decisiones (U27 lo escribe; se anota aquí para que no se pierda). U27 llevó cada punto a `docs/runbook.md`, y una prueba comprueba que cada nombre, ruta y comando de cada punto está allí; el de H5 sobre los archivos del sitio estaba rotulado R9, pero en el plan R9 es `database is locked`, así que está en R10 (D85):
