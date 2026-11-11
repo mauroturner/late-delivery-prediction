@@ -9,12 +9,15 @@ read its outputs and share the one run.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +39,16 @@ def python_m(*args: str, cwd: Path, timeout: int = 300) -> subprocess.CompletedP
     env.pop("LATEDEL_CONFIG", None)
     env.pop("LATEDEL_HOME", None)
     return subprocess.run([sys.executable, "-m", "latedel", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, encoding="utf-8")
+
+
+def in_process(*args: str) -> SimpleNamespace:
+    """A command of the CLI run in this process (``main(argv)``), with what it wrote: the same command as ``python -m latedel``, without starting an interpreter."""
+    from latedel.cli import main
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(list(args))
+    return SimpleNamespace(returncode=code, stdout=out.getvalue(), stderr=err.getvalue())
 
 
 def fingerprint() -> dict[str, tuple[int, int]]:
@@ -68,7 +81,7 @@ def quick(tmp_path_factory):
     elsewhere = tmp_path_factory.mktemp("elsewhere")
     before, sealed = fingerprint(), versioned_outputs()
     try:
-        made = python_m("make-fixture", "data/quick/dataco_fixture.csv", "--orders", ORDERS, cwd=PROJECT, timeout=120)
+        made = in_process("make-fixture", "data/quick/dataco_fixture.csv", "--orders", ORDERS)   # one process less: the command resolves the path against the project
         config = str(PROJECT / "config" / "pipeline.quick.toml")
         replayed = python_m("replay", "--config", config, "--until", "M2017-01", cwd=elsewhere)   # the launch and the delivery of January, in one process
         yield {"made": made, "replayed": replayed, "before": before, "after": fingerprint(), "elsewhere": elsewhere, "sealed": sealed, "sealed_after": versioned_outputs()}

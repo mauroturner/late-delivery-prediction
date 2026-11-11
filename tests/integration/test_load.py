@@ -144,13 +144,11 @@ def test_the_raw_tables_hold_the_values_of_the_frames(cfg, fixture_read, loaded_
 
 
 def test_loading_from_scratch_twice_gives_the_same_content(cfg, delivered, tmp_path, loaded_masters, loaded_copy):
-    first, second = connect(tmp_path / "a.sqlite"), connect(tmp_path / "b.sqlite")
+    """Two loads of the 15 deliveries from an empty warehouse give the same rows: this one, and the session's master, which was loaded from an empty warehouse too, in
+    steps (a copy of a smaller master and the deliveries after it), before this test. Each master is the warehouse a load from scratch gives (A1: one load, not two)."""
+    first = connect(tmp_path / "a.sqlite")
     load_through(first, delivered, cfg, 15)
-    load_through(second, delivered, cfg, 15)
-    for table in TABLES:
-        assert dump(first, table) == dump(second, table), table
     assert len(dump(first, "stg_orders")) == 3000
-    # the masters of the session are built on smaller ones (a copy of the file and the deliveries after it): each is the warehouse a load from scratch gives
     loaded_masters(5)
     master = loaded_copy(15, "master.sqlite")
     for table in TABLES:

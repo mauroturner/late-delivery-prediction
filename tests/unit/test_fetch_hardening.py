@@ -25,7 +25,8 @@ from tests.fixtures.http_server import FileServer
 from tests.unit.test_config import refused, variant
 from tests.unit.test_fetch import BODY, GOOD, LOCAL, get, http_ctx, snapshot
 
-DRIP = "/drip?step=100&pause=0.05"           # 42 pieces of 100 bytes, about 2 s in all
+DRIP = "/drip?step=100&pause=0.05"           # 42 pieces of 100 bytes, about 2 s in all: longer than the deadlines below
+SHORT_DRIP = "/drip?step=200&pause=0.025"    # 21 pieces of 200 bytes, about 0.5 s: a slow download that a deadline of 30 s leaves alone (A1, decision D91)
 
 
 def leftovers(folder: Path) -> list[str]:
@@ -51,17 +52,17 @@ def test_a_download_that_takes_longer_than_the_overall_deadline_is_refused_with_
 
 def test_a_slow_download_inside_the_deadline_succeeds_and_the_log_says_how_long_it_took(tmp_path, caplog):
     with FileServer(BODY) as server, caplog.at_level(logging.INFO, logger="latedel"):
-        dest, digest = download_file(server.url(DRIP), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=30, insecure_hosts=LOCAL)
+        dest, digest = download_file(server.url(SHORT_DRIP), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, max_seconds=30, insecure_hosts=LOCAL)
     assert dest.read_bytes() == BODY and digest == GOOD and leftovers(tmp_path) == ["f.csv"]
     ends = [r.getMessage() for r in caplog.records if r.getMessage().startswith("download end")]
     assert len(ends) == 1
     seconds = float(re.search(r"in (\d+\.\d) s", ends[0]).group(1))
-    assert 1.5 <= seconds <= 10, ends[0]
+    assert 0.3 <= seconds <= 10, ends[0]
 
 
 def test_without_a_deadline_the_download_behaves_as_before(tmp_path):
     with FileServer(BODY) as server:
-        dest, digest = download_file(server.url(DRIP), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, insecure_hosts=LOCAL)
+        dest, digest = download_file(server.url(SHORT_DRIP), tmp_path / "f.csv", GOOD, ["127.0.0.1"], 3, 10**7, 1000, 30, insecure_hosts=LOCAL)
     assert dest.read_bytes() == BODY and digest == GOOD
 
 
