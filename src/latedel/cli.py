@@ -50,7 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("figures", parents=[common], help="dibuja las figuras de la documentación (docs/figures/*.png) desde los archivos del sitio de la última corrida")
 
-    commands.add_parser("docs-sync", parents=[common], help="copia el resumen de resultados (reports/evaluation_summary.md) en el README")
+    commands.add_parser(
+        "docs-sync", parents=[common],
+        help="copia el resumen de resultados (reports/evaluation_summary.md) en el README y las tablas del modelo en el diccionario de datos (docs/data-dictionary.md), si existe",
+    )
 
     fixture = commands.add_parser("make-fixture", help="escribe una fuente sintética para pruebas y modo rápido")
     fixture.add_argument("output", type=Path, metavar="SALIDA.csv")
@@ -131,6 +134,12 @@ def _execute(args: argparse.Namespace, cfg) -> int:
             raise FileNotFoundError(f"No existe {summary}: corra la tarea report antes de docs-sync")
         changed = sync_results(cfg.paths.readme, summary)
         _say(f"{cfg.paths.readme.name} actualizado" if changed else f"{cfg.paths.readme.name} ya estaba al día")
+        from latedel.dashboard.semantic_model import MODEL
+        from latedel.docs import dictionary_path, sync_dictionary
+
+        dictionary = dictionary_path(cfg.paths.figures_dir)   # docs/ in the project; the quick mode has none, and then only the README is written, as before U27
+        if dictionary.is_file():
+            _say(f"{dictionary.name} actualizado" if sync_dictionary(dictionary, MODEL) else f"{dictionary.name} ya estaba al día")
         return EXIT_OK
     if args.command == "figures":
         from latedel.figures import make_figures   # matplotlib takes about a second to import: only the command that draws pays for it

@@ -136,7 +136,7 @@ La partición en el tiempo (pedidos no cancelados, con purgas de siete días ent
 | Prueba | 2017-01-08 | 2017-09-30 | 14.527 | Evaluar una sola vez, bajo el sello |
 | Posterior al cambio de forma | 2017-10-01 | 2018-01-31 | 8.043 | Informar aparte |
 
-Cada columna de la fuente, con su destino, y cada columna de cada tabla exportada, con su unidad, estarán en el diccionario de datos, `docs/data-dictionary.md` (U27).
+Cada columna de la fuente, con su destino, y cada columna de cada tabla exportada, con su unidad, están en [docs/data-dictionary.md](docs/data-dictionary.md).
 
 ## Los algoritmos
 
@@ -164,12 +164,12 @@ Ecuaciones, límites y resultados de cada método en la [ficha del modelo](docs/
 | [docs/research.md](docs/research.md) | La investigación del conjunto de datos: la fuente, la fuga, la partición y una primera mirada |
 | [docs/requirements.md](docs/requirements.md) | Requerimientos, datos medidos y criterios de aceptación, con los criterios del modelo fijados antes de construir |
 | [docs/plan.md](docs/plan.md) | Arquitectura, módulos, contratos y unidades de trabajo |
-| [docs/decisions.md](docs/decisions.md) | Registro de decisiones (D01-D84), cada una con su contexto, opciones, decisión, motivo, lo que afecta, quién y estado |
+| [docs/decisions.md](docs/decisions.md) | Registro de decisiones (D01-D85), cada una con su contexto, opciones, decisión, motivo, lo que afecta, quién y estado |
 | [docs/model-card.md](docs/model-card.md) | Ficha del modelo: uso, datos, métodos, validación, resultados, rendimiento y límites |
 | [docs/review-advisories.md](docs/review-advisories.md) | Las advertencias de las revisiones nativas, con su resolución |
-| `docs/data-dictionary.md` (U27) | Diccionario de datos con unidades |
-| `docs/runbook.md` (U27) | Qué hacer ante una huella distinta, una entrega rechazada, un bloqueo de la carpeta de datos y más |
-| `docs/paso-a-paso.md` (U27) | Cómo se construyó, unidad por unidad |
+| [docs/data-dictionary.md](docs/data-dictionary.md) | Diccionario de datos: las 53 columnas de la fuente con su destino y cada columna de las 20 tablas exportadas, con su unidad |
+| [docs/runbook.md](docs/runbook.md) | Qué hacer ante una huella distinta, una entrega rechazada, la trampa de fuga, un sello que no se reproduce, un bloqueo de la carpeta de datos y más (R1-R13) |
+| [docs/paso-a-paso.md](docs/paso-a-paso.md) | Cómo se construyó, unidad por unidad, con sus commits |
 | `docs/evaluation.md` | La evaluación independiente: todavía no se hizo (plan, sección 25) |
 
 ## Con IA, de punta a punta
@@ -178,14 +178,14 @@ Este proyecto lo construyeron agentes de IA, cada uno con el modelo que el dueñ
 
 - **Investigación.** Un agente con Haiku descargó el CSV de Mendeley, comprobó su huella con la API de archivos, perfiló las 53 columnas, midió la fuga (con la fecha de envío y el modo, el AUC en la prueba llega a 0,9985), propuso la partición y las líneas base e hizo una primera mirada del modelo; escribió `research.md`. La sesión que orquestaba reemplazó una dirección de ejemplo por su forma.
 - **Requerimientos y plan.** Un agente con Opus repitió parte del perfilado solo con conteos y con el bloque de entrenamiento, encontró que la fecha de envío es la del pedido más 12, 48 o de 48 a 144 horas según el modo y que los Same Day creados desde el mediodía llegan tarde siempre, agregó la regla B5 por eso, eligió el pedido como unidad y escribió `requirements.md`, `plan.md` y las primeras 36 decisiones. Fijó los criterios C01-C10 sin calcular ninguna métrica en la validación ni en la prueba, escribió que C03 y C05 probablemente no se cumplirían, y todo eso se confirmó en Git antes de la primera línea de código.
-- **Programación.** Hasta U24, agentes con Sonnet construyeron cada unidad de trabajo, por tandas, con la prueba escrita primero y vista fallar, y una mutación por regla atrapada por una prueba con nombre; cuando el código de una unidad se escribió antes que su prueba, el registro lo dice (D37, D39). Desde L36 el dueño pidió Opus para las pruebas y la implementación, y agentes con Opus construyeron la segunda aceleración de la suite, las unidades de endurecimiento H5 a H8, la corrida real (U25) y lo que siguió: H9, este README y la ficha del modelo.
+- **Programación.** Hasta U24, agentes con Sonnet construyeron cada unidad de trabajo, por tandas, con la prueba escrita primero y vista fallar, y una mutación por regla atrapada por una prueba con nombre; cuando el código de una unidad se escribió antes que su prueba, el registro lo dice (D37, D39). Desde L36 el dueño pidió Opus para las pruebas y la implementación, y agentes con Opus construyeron la segunda aceleración de la suite, las unidades de endurecimiento H5 a H8, la corrida real (U25) y lo que siguió: H9, este README, la ficha del modelo, el diccionario, el runbook y el paso a paso.
 - **Revisión.** La revisión nativa de Gentle AI revisó por separado cada unidad que tocaba un punto de riesgo alto (el entorno, el archivo no confiable, la descarga, el artefacto del modelo, el sello, los contratos del tablero y del sitio, el orden del cierre, Docker) y sus correcciones; el dueño pidió aceptar sus pedidos de consentimiento de forma automática. Una revisión, la de U23, pidió una corrección por un hallazgo crítico (el script de inicialización de Airflow seguía después de una migración fallida y salía con 0), que se hizo con la prueba primero. La de H7 terminó escalada, sin aprobación, por un hallazgo crítico de causalidad desconocida; la sesión que orquestaba lo comprobó contra el código, no se sostenía, y una prueba lo fija (`c01fc61`). La de U25 superó el presupuesto de contexto de la revisión y se hizo en tres partes. Las demás aprobaron con advertencias o sin ellas; cada advertencia tiene su resolución en [docs/review-advisories.md](docs/review-advisories.md).
 - **La corrida real.** Un agente con Opus corrió la repetición completa una sola vez, con los costos supuestos tal como estaban porque el dueño no eligió otros, escribió el sello y versionó las salidas. Nada se ajustó después de ver la prueba.
 - **Airflow en Docker.** Primero con pruebas estáticas del DAG y del compose. Después, `pytest -m docker` construyó la imagen, comprobó con `pip check` que las versiones fijadas conviven con las de Airflow y corrió `airflow dags test latedel_monthly` dos veces en modo rápido sobre una fuente sintética: el lanzamiento y la entrega de enero de 2017 terminaron bien con el modelo congelado idéntico (2 de 2 en 71,6 s, D80).
 - **Lo que no se hizo todavía.** La evaluación independiente, que hará un agente que no construyó el proyecto (plan, sección 25): ninguna afirmación de este README fue comprobada todavía por alguien ajeno a la construcción. Tampoco la corrida programada de Airflow sobre el archivo real ni el `.pbix`.
 - **Memoria.** El documento de seguimiento conserva las palabras del dueño tal cual y lo que hizo cada sesión.
 
-Cómo fue cada paso, con los commits, estará en `docs/paso-a-paso.md` (U27).
+Cómo fue cada paso, con los commits, está en [docs/paso-a-paso.md](docs/paso-a-paso.md).
 
 ## Para qué sirve
 
@@ -223,20 +223,20 @@ $env:PYTHONPATH = "src"
 .venv\Scripts\python -m pytest -m real_data
 .venv\Scripts\python -m pytest -m docker
 
-# Figuras de la documentación y bloque de resultados del README
+# Figuras de la documentación, bloque de resultados del README y tablas del diccionario de datos
 .venv\Scripts\python -m latedel figures
 .venv\Scripts\python -m latedel docs-sync
 ```
 
 En el proyecto, la corrida real ya se hizo y su sello está versionado: repetirla con la misma configuración reproduce los valores sellados y no reescribe el sello, y con otra configuración el resultado se guarda aparte, como posterior al sello. Como la repetición reescribe las salidas versionadas con sus propias claves de corrida, conviene hacerla en una copia de la carpeta: allí `pytest -m real_data` pasa salvo la prueba de la corrida sellada, que comprueba que el sello y las salidas son de las mismas corridas y falla solo en esas claves (el sello conserva las de la corrida que lo escribió). En Linux, el entorno se crea con `python3.11 -m venv .venv`, los comandos usan `.venv/bin/python` y la variable se fija con `export PYTHONPATH=src`.
 
-Con Airflow (Docker Compose): `cd airflow`, `copy .env.example .env` y completar en `.env` las cuatro claves, que no tienen valor por defecto (`FERNET_KEY`, `AIRFLOW__API_AUTH__JWT_SECRET`, `_AIRFLOW_WWW_USER_PASSWORD` y `LATEDEL_DB_PASSWORD`, la contraseña de la base de metadatos); en Linux, agregar `AIRFLOW_UID` con el id propio (`id -u`). Después, `docker compose up airflow-init` (construye la imagen y prepara la base) y `docker compose up -d`; la interfaz queda en `http://localhost:8080`, publicada solo en `127.0.0.1`. `pytest -m docker` prueba esta parte de punta a punta en modo rápido. Detalles y qué hacer si algo falla, en el runbook (U27).
+Con Airflow (Docker Compose): `cd airflow`, `copy .env.example .env` y completar en `.env` las cuatro claves, que no tienen valor por defecto (`FERNET_KEY`, `AIRFLOW__API_AUTH__JWT_SECRET`, `_AIRFLOW_WWW_USER_PASSWORD` y `LATEDEL_DB_PASSWORD`, la contraseña de la base de metadatos); en Linux, agregar `AIRFLOW_UID` con el id propio (`id -u`). Después, `docker compose up airflow-init` (construye la imagen y prepara la base) y `docker compose up -d`; la interfaz queda en `http://localhost:8080`, publicada solo en `127.0.0.1`. `pytest -m docker` prueba esta parte de punta a punta en modo rápido. Detalles y qué hacer si algo falla, en [docs/runbook.md](docs/runbook.md).
 
-Medido en la corrida real con el archivo ya descargado (AMD Ryzen 9 5950X de 16 núcleos, 64 GB, Windows 10, un solo proceso): la repetición completa, las quince entregas y la corrida sin entrega, tardó 105,14 s contra el tope de 10 minutos; el lanzamiento, 30 s contra 3 minutos (20,1 s de ellos en entrenar, calibrar y elegir el umbral), y cada corrida mensual de 3 a 7 s contra 60 s. El pico de memoria que mide el requisito es el del conjunto de trabajo del proceso (`PeakWorkingSetSize` de `GetProcessMemoryInfo`; en Linux, `ru_maxrss`): 921,6 MB contra el tope de 1,5 GB. La memoria comprometida del mismo proceso (`PeakPagefileUsage`), que se guarda como cifra informativa y sin tope, llegó a 2.824,1 MB. La suite rápida tarda 142,55 s (1.257 pruebas, una de ellas se salta en Windows) contra los 150 pedidos. Tabla por tarea en la [ficha del modelo](docs/model-card.md).
+Medido en la corrida real con el archivo ya descargado (AMD Ryzen 9 5950X de 16 núcleos, 64 GB, Windows 10, un solo proceso): la repetición completa, las quince entregas y la corrida sin entrega, tardó 105,14 s contra el tope de 10 minutos; el lanzamiento, 30 s contra 3 minutos (20,1 s de ellos en entrenar, calibrar y elegir el umbral), y cada corrida mensual de 3 a 7 s contra 60 s. El pico de memoria que mide el requisito es el del conjunto de trabajo del proceso (`PeakWorkingSetSize` de `GetProcessMemoryInfo`; en Linux, `ru_maxrss`): 921,6 MB contra el tope de 1,5 GB. La memoria comprometida del mismo proceso (`PeakPagefileUsage`), que se guarda como cifra informativa y sin tope, llegó a 2.824,1 MB. La suite rápida tarda 142,89 s (1.267 pruebas, una de ellas se salta en Windows) contra los 150 pedidos. Tabla por tarea en la [ficha del modelo](docs/model-card.md).
 
 ## Paso a paso
 
-El proyecto se construyó en 27 unidades de trabajo más nueve de endurecimiento tras las revisiones y dos de velocidad de la suite, cada una con sus pruebas y su commit: investigación, requerimientos y plan, entorno y configuración, accesorio sintético, lectura segura y minimización, descarga con huella, entregas en dos flujos, validación, almacén y SQL, variables y guardas de fuga, partición y líneas base, modelo y calibración, umbral por costo, lanzamiento congelado y sello, evaluación y criterios, seguimiento mensual, modelo estrella, medidas DAX, diseño del tablero, exportación para el sitio, tareas y cierre ordenado, línea de comandos, Airflow y Docker, figuras, corrida real y documentación. La cronología completa, con lo que se hizo, lo que se probó y lo que salió en cada una, estará en `docs/paso-a-paso.md` (U27).
+El proyecto se construyó en 27 unidades de trabajo más nueve de endurecimiento tras las revisiones y dos de velocidad de la suite, cada una con sus pruebas y su commit: investigación, requerimientos y plan, entorno y configuración, accesorio sintético, lectura segura y minimización, descarga con huella, entregas en dos flujos, validación, almacén y SQL, variables y guardas de fuga, partición y líneas base, modelo y calibración, umbral por costo, lanzamiento congelado y sello, evaluación y criterios, seguimiento mensual, modelo estrella, medidas DAX, diseño del tablero, exportación para el sitio, tareas y cierre ordenado, línea de comandos, Airflow y Docker, figuras, corrida real y documentación. La cronología completa, con lo que se hizo, lo que se probó y lo que salió en cada una, está en [docs/paso-a-paso.md](docs/paso-a-paso.md).
 
 ## Fuente y licencia
 
