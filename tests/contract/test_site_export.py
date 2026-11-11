@@ -556,7 +556,9 @@ def test_validation_rules_are_in_the_order_of_the_report_the_source_ones_read_on
         assert (r.name_es, r.scope) == (rule.name_es, rule.scope) and r.severity == rule.severity.value and r.status in {"pass", "fail", "warn", "not_evaluated"}
     # the fixture warehouse recorded V11 (a warning that failed, 7 lines and 4 orders), V20, M05 and I02 (5 lines, 9 orders) for each of its first three runs
     assert (by_id["V11"].status, by_id["V11"].rows, by_id["V11"].orders) == ("warn", 7, 4), "a rule of the source describes one file: read once, not summed over three runs"
-    assert (by_id["I02"].status, by_id["I02"].rows, by_id["I02"].orders) == ("pass", 15, 27), "a rule of the model is summed over the runs that loaded a delivery"
+    # I02 and I04 count the follow-up of every month closed up to the run's date, so the latest run's count already holds the earlier ones: summed over the runs, the
+    # real export said 66,761 alerts where alerts.json's months add up to 8,840 (found while building the site page). They are read once, from the latest loaded run.
+    assert (by_id["I02"].status, by_id["I02"].rows, by_id["I02"].orders) == ("pass", 5, 9), "the follow-up of the latest run already counts the earlier months"
     assert by_id["V20"].status == "pass" and by_id["V01"].status == "not_evaluated" and by_id["V01"].rows == 0
     assert by_id["V24"].status == "not_evaluated", "the rejected run is not a loaded one: its failed rule is not in the totals"
     order = frames["fact_order"]

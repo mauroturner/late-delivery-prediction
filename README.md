@@ -164,7 +164,7 @@ Ecuaciones, límites y resultados de cada método en la [ficha del modelo](docs/
 | [docs/research.md](docs/research.md) | La investigación del conjunto de datos: la fuente, la fuga, la partición y una primera mirada |
 | [docs/requirements.md](docs/requirements.md) | Requerimientos, datos medidos y criterios de aceptación, con los criterios del modelo fijados antes de construir |
 | [docs/plan.md](docs/plan.md) | Arquitectura, módulos, contratos y unidades de trabajo |
-| [docs/decisions.md](docs/decisions.md) | Registro de decisiones (D01-D93), cada una con su contexto, opciones, decisión, motivo, lo que afecta, quién y estado |
+| [docs/decisions.md](docs/decisions.md) | Registro de decisiones (D01-D94), cada una con su contexto, opciones, decisión, motivo, lo que afecta, quién y estado |
 | [docs/model-card.md](docs/model-card.md) | Ficha del modelo: uso, datos, métodos, validación, resultados, rendimiento y límites |
 | [docs/review-advisories.md](docs/review-advisories.md) | Las advertencias de las revisiones nativas, con su resolución |
 | [docs/data-dictionary.md](docs/data-dictionary.md) | Diccionario de datos: las 53 columnas de la fuente con su destino y cada columna de las 20 tablas exportadas, con su unidad |

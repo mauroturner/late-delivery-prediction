@@ -270,9 +270,14 @@ def _summary(conn: sqlite3.Connection, meta: ExportMeta, cfg: PipelineConfig) ->
 # --- validation_rules.json ---------------------------------------------------------------------------------------------------------------
 
 
+READ_ONCE_MODEL_RULES = ("I02", "I04")
+
+
 def _validation(conn: sqlite3.Connection) -> dict[str, Any]:
-    """The rules in the order of the report. A rule of the source describes one file and is read once, from the latest loaded run; the others are summed over the runs
-    that loaded a delivery. A rule that no loaded run recorded is ``not_evaluated``."""
+    """The rules in the order of the report. A rule of the source describes one file and is read once, from the latest loaded run; so are I02 and I04
+    (``READ_ONCE_MODEL_RULES``), because the follow-up of a run counts every month closed up to its date and already holds the earlier runs' months (summed over the
+    runs, the real export said 66,761 alerts where ``alerts.json`` adds up to 8,840; D94). The others are summed over the runs that loaded a delivery. A rule that no
+    loaded run recorded is ``not_evaluated``."""
     rows = _query(
         conn,
         "SELECT v.rule_id, v.status, v.rows_affected, v.orders_affected, d.as_of_date FROM star_fact_validation AS v "
@@ -281,7 +286,7 @@ def _validation(conn: sqlite3.Connection) -> dict[str, Any]:
     rules = []
     for rule_id, rule in RULES.items():
         mine = rows[rows["rule_id"] == rule_id]
-        shown = mine.tail(1) if rule.scope == "source" else mine
+        shown = mine.tail(1) if rule.scope == "source" or rule_id in READ_ONCE_MODEL_RULES else mine
         statuses = set(shown["status"])
         unknown = statuses - set(STATUS_EN)
         if unknown:

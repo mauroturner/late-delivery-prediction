@@ -97,6 +97,10 @@ def test_real_counts_seal_and_summary_consistency(cfg):
     for rule_id in ("V08", "V09"):
         assert (by_rule[rule_id]["status"], by_rule[rule_id]["rows"], by_rule[rule_id]["orders"]) == ("pass", 0, 0), by_rule[rule_id]
     assert not any(r["status"] == "fail" and r["severity"] == "blocking" for r in rules["rules"])
+    # I02 and I04 say the follow-up of the whole period once, as alerts.json does (summed over the runs they said 66,761 and 3,156 alerts)
+    alerts = docs["alerts.json"]
+    assert (by_rule["I02"]["rows"], by_rule["I02"]["orders"]) == (sum(m["alerts"] for m in alerts["monthly"]), sum(m["orders"] for m in alerts["monthly"]))
+    assert by_rule["I04"]["rows"] == alerts["cancelled"]["alerts_on_later_cancelled"]
     closed = fact_order[fact_order["outcome_status"] == "closed"]
     assert len(closed) == TASK_ORDERS and closed["is_late"].notna().all() and closed["real_days"].notna().all()
     assert headline["late_share_task"] == round(int(closed["is_late"].sum()) / TASK_ORDERS, 3)

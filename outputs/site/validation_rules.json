@@ -265,8 +265,8 @@
   },
   {
    "name_es": "Alertas emitidas y porcentaje de pedidos alertados",
-   "orders": 179458,
-   "rows": 66761,
+   "orders": 23600,
+   "rows": 8840,
    "rule_id": "I02",
    "scope": "model",
    "severity": "info",
@@ -283,8 +283,8 @@
   },
   {
    "name_es": "Alertas sobre pedidos que después se cancelaron",
-   "orders": 7691,
-   "rows": 3156,
+   "orders": 1030,
+   "rows": 419,
    "rule_id": "I04",
    "scope": "model",
    "severity": "info",
