@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from latedel.export import build_powerbi_marts
+from latedel.export import build_powerbi_marts, split_blocks
 from latedel.registry import write_launch_seal
 from latedel.warehouse import SQL_DIR, CheckFailedError, connect, run_checks
 from tests.unit.test_seal import launch_for
@@ -281,3 +281,90 @@ def test_a_build_with_a_dropped_order_still_stops_and_says_which_control(private
     add_order(conn, 910020, "2018-01-25")                   # an order without lines does not reach the fact: the control of the orders stops the build
     with pytest.raises(CheckFailedError, match="chk_fact_order_unique"):
         build_powerbi_marts(conn, cfg)
+
+
+# --- H6 (review of H4): an empty post-break block, overlapping edges and the JSON functions of SQLite -----------------------------------------------------
+
+
+def star_tables(conn) -> dict[str, list]:
+    names = [n for (n,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND (name LIKE 'star_%' OR name LIKE 'ref_%') ORDER BY name")]
+    return {n: conn.execute(f"SELECT * FROM {n} ORDER BY 1, 2").fetchall() for n in names}
+
+
+def test_a_split_whose_post_break_block_has_no_days_is_refused_before_any_mart_is_built(private):
+    """R4-dim-month-regime-null-fallback and R3-ref-block-post-break-subquery: with the post-break block empty, ``split_blocks`` left it out of ``ref_block``, the regime
+    of ``dim_month`` compared every month with NULL and labelled all of them ``pre_break``, with no error. A block of the split without days is now refused, naming it,
+    before anything is built; the marts keep what they had."""
+    conn, cfg, _tmp = private
+    build_powerbi_marts(conn, cfg)
+    before = star_tables(conn)
+    assert {r for (r,) in conn.execute("SELECT DISTINCT regime FROM star_dim_month")} == {"pre_break", "post_break"}
+    empty = replace(cfg, split=replace(cfg.split, post_break_end=cfg.split.post_break_start - timedelta(days=1)))
+    with pytest.raises(ValueError, match=r"\[split\].*post_break.*no tiene días"):
+        build_powerbi_marts(conn, empty)
+    assert star_tables(conn) == before, "nothing is built and the marts keep what they had"
+    for block, field in (("train", "train_end"), ("test", "test_end")):
+        start = getattr(cfg.split, field.replace("_end", "_start"))
+        with pytest.raises(ValueError, match=rf"\[split\].*{block}.*no tiene días"):
+            split_blocks(replace(cfg, split=replace(cfg.split, **{field: start - timedelta(days=1)})))
+
+
+def test_the_loader_of_the_configuration_still_refuses_an_empty_post_break_block(tmp_path):
+    """The previous behaviour: ``load_config`` never let such a split through (the second line above is for a configuration built without it)."""
+    from latedel.config import DEFAULT_CONFIG, load_config
+
+    path = tmp_path / "split.toml"
+    path.write_text(f'extends = "{DEFAULT_CONFIG.as_posix()}"\n\n[split]\npost_break_end = 2017-09-30\n', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\[split\] post_break_start"):
+        load_config(path)
+
+
+def test_overlapping_blocks_are_refused_before_a_day_is_in_two_of_them(private):
+    """R3-ref-block-overlap-duplicate-rows: the join with ``ref_block`` by ``BETWEEN`` repeats an order whose day is in two blocks; the build then stopped on a control of
+    the facts, without saying why. Two blocks that share a day are now refused, naming both, before anything is built."""
+    conn, cfg, _tmp = private
+    build_powerbi_marts(conn, cfg)
+    before = star_tables(conn)
+    overlap = replace(cfg, split=replace(cfg.split, test_end=cfg.split.post_break_start + timedelta(days=3)))
+    with pytest.raises(ValueError, match=r"\[split\].*test.*post_break.*se superponen"):
+        build_powerbi_marts(conn, overlap)
+    assert star_tables(conn) == before
+    assert [b for b, *_ in split_blocks(cfg)] == ["train", "purge_1", "valid_v1", "valid_v2", "purge_2", "test", "post_break"]   # the edges of the configuration touch, never overlap
+
+
+class WithoutJson:
+    """A connection whose SQLite has no JSON functions, as one built without JSON1 before 3.38."""
+
+    def execute(self, sql, *args):
+        if "json_" in sql:
+            raise sqlite3.OperationalError("no such function: json_array")
+        raise AssertionError(f"unexpected statement: {sql}")
+
+
+def test_a_sqlite_without_the_json_functions_is_refused_with_what_it_needs(private, monkeypatch):
+    """R4-version-dependent-functions-no-degradation-path and R3-json-array-dependency: the controls of the model (``json_array``) and ``dim_model.sql``
+    (``json_extract``) need the JSON functions of SQLite, built in since 3.38.0. A SQLite without them stops the build before anything is written, saying which functions
+    and which version it has, instead of failing inside a control."""
+    from latedel import export
+    from latedel.warehouse import SqliteFeatureError, require_json_functions
+
+    with pytest.raises(SqliteFeatureError, match=r"json_array.*json_extract.*3\.38"):
+        require_json_functions(WithoutJson())
+    conn, cfg, _tmp = private
+    build_powerbi_marts(conn, cfg)
+    before = star_tables(conn)
+
+    def no_json(_conn):
+        raise SqliteFeatureError("no JSON")
+
+    monkeypatch.setattr(export, "require_json_functions", no_json)
+    with pytest.raises(SqliteFeatureError):
+        build_powerbi_marts(conn, cfg)
+    assert star_tables(conn) == before
+
+
+def test_the_sqlite_of_this_python_has_the_json_functions_the_marts_need():
+    """The guard on the machines where this runs: Windows with Python 3.11 (SQLite 3.39.4) and the Airflow image (Python 3.13, SQLite 3.46.1)."""
+    from latedel.warehouse import require_json_functions
+
+    require_json_functions(sqlite3.connect(":memory:"))

@@ -206,3 +206,49 @@ def test_a_lost_update_of_the_test_part_is_logged_with_both_runs_where_it_is_det
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR and r.name == "latedel.registry"]
     assert len(errors) == 1 and "run-mine" in errors[0] and "run-other" in errors[0] and "R7" in errors[0]
     assert read_seal(path)["test"]["run_key"] == "run-other", "the file keeps what the other writer put there, as before"
+
+
+# --- H6 (review of H4) ---------------------------------------------------------------------------------------------------------------------------------
+
+
+def test_where_the_owner_only_mode_is_not_the_access_control_the_creation_of_the_seal_says_so(tmp_path, monkeypatch, caplog):
+    """R1-001 of the review of H4: the Windows caveat of the owner-only mode lived only in a comment. Where the mode bits are not the access control, creating the seal
+    logs it with the folder whose access list decides who reads it; on both paths, and once per created seal (a seal that was already there logs nothing)."""
+    import logging
+
+    monkeypatch.setattr(registry, "_mode_is_access_control", lambda: False)
+    with caplog.at_level(logging.WARNING, logger="latedel.registry"):
+        assert _create_exclusive(tmp_path / "main.json", b"x\n") is True
+        assert _create_exclusive(tmp_path / "main.json", b"y\n") is False
+        without_hard_links(monkeypatch)
+        assert _create_exclusive(tmp_path / "fallback.json", b"x\n") is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and r.name == "latedel.registry"]
+    assert len(warnings) == 2 and all("0o600" in w and str(tmp_path) in w and "R7" in w for w in warnings), warnings
+    assert "main.json" in warnings[0] and "fallback.json" in warnings[1]
+
+
+def test_where_the_mode_is_the_access_control_nothing_is_logged(tmp_path, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(registry, "_mode_is_access_control", lambda: True)
+    with caplog.at_level(logging.WARNING, logger="latedel.registry"):
+        assert _create_exclusive(tmp_path / "seal.json", b"x\n") is True
+    assert [r for r in caplog.records if r.name == "latedel.registry"] == []
+
+
+def test_the_mode_is_the_access_control_on_posix_only():
+    assert registry._mode_is_access_control() is (os.name == "posix")
+
+
+def test_the_log_of_a_lost_update_names_the_run_that_wrote_and_the_run_that_was_kept_each_in_its_role(cfg, tmp_path, monkeypatch, caplog):
+    """R3-weak-log-attribution-assertion: the test of H4 only checked that both runs appear; swapping them would still pass. The roles are checked here word by word."""
+    import logging
+    import re
+
+    path = seal_with_launch(cfg, tmp_path)
+    other = part_of_test(cfg, run_key="run-other", metrics={"model": {"auc": 0.5}, "b2_mode": {"auc": 0.74}, "b5_mode_noon": {"auc": 0.781}})
+    another_writer_wins(monkeypatch, path, other)
+    with caplog.at_level(logging.ERROR, logger="latedel.registry"), pytest.raises(SealMismatchError):
+        write_test_seal(path, part_of_test(cfg, run_key="run-mine"))
+    [message] = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR and r.name == "latedel.registry"]
+    assert re.search(r"written by run run-mine was replaced by the one of run run-other", message), message

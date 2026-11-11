@@ -26,7 +26,7 @@ from latedel.evaluation import METHOD_LABELS_ES, METHODS
 from latedel.files import write_atomic
 from latedel.registry import read_seal
 from latedel.schema import ATTRIBUTION
-from latedel.warehouse import SQL_DIR, CheckFailedError, apply_schema, run_checks, run_sql_file, sql_params
+from latedel.warehouse import SQL_DIR, CheckFailedError, apply_schema, require_json_functions, run_checks, run_sql_file, sql_params
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,9 @@ def _params(conn: sqlite3.Connection, cfg: PipelineConfig) -> dict[str, object]:
 def split_blocks(cfg: PipelineConfig) -> list[tuple[str, str, str, str]]:
     """``(block, block_es, first_day, last_day)`` of each block of the split, from ``[split]`` (D08): the one place where the edges become blocks for the model marts.
 
-    The purges are the days between two blocks; a purge of no days has no row, and a date that no row holds is ``outside``.
+    The purges are the days between two blocks; a purge of no days has no row, and a date that no row holds is ``outside``. Any other block without days, and two blocks
+    that share a day, are a ``ValueError`` that names them (review of H4, D78): an empty post-break block made every month ``pre_break``, and a day in two blocks repeated
+    its orders. ``load_config`` refuses both already; this is the second line for a configuration built without it.
     """
     s, day = cfg.split, timedelta(days=1)
     edges = {
@@ -80,6 +82,16 @@ def split_blocks(cfg: PipelineConfig) -> list[tuple[str, str, str, str]]:
         "valid_v2": (s.valid_v2_start, s.valid_end), "purge_2": (s.valid_end + day, s.test_start - day), "test": (s.test_start, s.test_end),
         "post_break": (s.post_break_start, s.post_break_end),
     }
+    for block, (first, last) in edges.items():
+        if first > last and not block.startswith("purge"):
+            raise ValueError(f"[split]: el bloque {block} no tiene días (del {first} al {last}): sin él los marts del modelo estrella no pueden ubicar sus días")
+    present = sorted((first, last, block) for block, (first, last) in edges.items() if first <= last)
+    for (first, last, block), (later_first, later_last, later) in zip(present, present[1:]):
+        if later_first <= last:
+            raise ValueError(
+                f"[split]: los bloques {block} (del {first} al {last}) y {later} (del {later_first} al {later_last}) se superponen: un día estaría en dos bloques "
+                "y sus pedidos se repetirían en los marts"
+            )
     return [(block, BLOCK_LABELS_ES[block], first.isoformat(), last.isoformat()) for block, (first, last) in edges.items() if first <= last]
 
 
@@ -105,8 +117,11 @@ def _load_references(conn: sqlite3.Connection, cfg: PipelineConfig) -> None:
 def build_powerbi_marts(conn: sqlite3.Connection, cfg: PipelineConfig) -> None:
     """Rebuild the dimensions and facts and run the model controls, all in one transaction.
 
-    Needs at least one loaded delivery. If a control returns rows, ``CheckFailedError`` is raised and the marts keep what they had.
+    Needs at least one loaded delivery and the JSON functions of SQLite (``require_json_functions``). If a control returns rows, ``CheckFailedError`` is raised and the
+    marts keep what they had; a split with a block without days or two blocks that share a day is a ``ValueError`` before anything is built.
     """
+    require_json_functions(conn)
+    split_blocks(cfg)
     apply_schema(conn)
     params = _params(conn, cfg)
     conn.execute("BEGIN IMMEDIATE")

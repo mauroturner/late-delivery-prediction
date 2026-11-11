@@ -107,6 +107,28 @@ class SchemaDriftError(RuntimeError):
         )
 
 
+class SqliteFeatureError(RuntimeError):
+    """The SQLite that this Python links lacks a function that the project's SQL calls."""
+
+
+# The JSON functions that the model marts (dim_model.sql, json_extract) and their controls (chk_star_keys_unique.sql, json_array) call. They are built into SQLite since
+# 3.38.0, and before that they were the JSON1 extension, compiled into the builds of CPython for Windows and into Debian's libsqlite3. Measured: Windows with Python
+# 3.11.1 links SQLite 3.39.4, the image apache/airflow:3.4.0 (Python 3.13.18) SQLite 3.46.1. SQLite comes with the Python build, so no pin of requirements.txt or
+# pyproject.toml can fix it; the build checks it first (review of H4, D78).
+SQLITE_JSON_FUNCTIONS = ("json_array", "json_extract")
+
+
+def require_json_functions(conn: sqlite3.Connection) -> None:
+    """Stop with ``SqliteFeatureError``, saying which functions and which SQLite, when the connection has no JSON functions; nothing is written either way."""
+    try:
+        conn.execute("SELECT json_array(1, 'a'), json_extract('{\"a\": 1}', '$.a')").fetchone()
+    except sqlite3.OperationalError as error:
+        raise SqliteFeatureError(
+            f"El SQLite de este Python ({sqlite3.sqlite_version}) no tiene las funciones JSON ({', '.join(SQLITE_JSON_FUNCTIONS)}) que usan los marts del modelo y sus "
+            f"controles: hace falta SQLite 3.38 o posterior, o uno compilado con JSON1 ({error})"
+        ) from error
+
+
 # --- connection and SQL files -------------------------------------------------------------------------------------------
 
 

@@ -180,7 +180,8 @@ def _dump(document: dict) -> str:
 
 
 # The mode of the seal file, the same one ``tempfile.mkstemp`` gives the temporary file of the main path: for its owner only. Enforced where the mode bits are the access
-# control (POSIX). On Windows ``os.open`` takes only the read-only bit of the mode, so the file gets the access list of its folder, on both paths alike (H4, R1-001).
+# control (POSIX). On Windows ``os.open`` takes only the read-only bit of the mode, so the file gets the access list of its folder, on both paths alike (H4, R1-001);
+# the creation of a seal logs that caveat where it applies (``_say_who_can_read``, H6).
 SEAL_MODE = 0o600
 
 # What the system answers to a hard link on a file system that has none (FAT and exFAT, some network shares). Any other error of ``os.link`` is a real error.
@@ -190,6 +191,22 @@ _WINDOWS_NO_HARD_LINKS = frozenset({1, 50})      # ERROR_INVALID_FUNCTION and ER
 
 def _lacks_hard_links(error: OSError) -> bool:
     return error.errno in _NO_HARD_LINKS or getattr(error, "winerror", None) in _WINDOWS_NO_HARD_LINKS
+
+
+def _mode_is_access_control() -> bool:
+    """True where the mode bits of a file decide who can read it (POSIX); on Windows ``os.open`` and ``mkstemp`` take only the read-only bit, and the access list of the
+    folder decides."""
+    return os.name == "posix"
+
+
+def _say_who_can_read(path: Path) -> None:
+    """The caveat of ``SEAL_MODE`` made observable (review of H4, R1-001): where the mode is not the access control, the creation of a seal says so, with the folder whose
+    access list decides who reads it."""
+    if not _mode_is_access_control():
+        logger.warning(
+            "seal %s: the owner-only mode 0o%o is not enforced on this system (os.name %s); who can read it is decided by the access list of the folder %s (runbook R7)",
+            path.name, SEAL_MODE, os.name, path.parent,
+        )
 
 
 def _create_exclusive(path: Path, data: bytes) -> bool:
@@ -205,13 +222,17 @@ def _create_exclusive(path: Path, data: bytes) -> bool:
             out.write(data)
         try:
             os.link(name, path)             # fails if `path` exists, and `path` never shows half a file
+            _say_who_can_read(path)
             return True
         except FileExistsError:
             return False
         except OSError as error:
             if not _lacks_hard_links(error):
                 raise
-        return _create_without_link(path, data)
+        created = _create_without_link(path, data)
+        if created:
+            _say_who_can_read(path)
+        return created
     finally:
         Path(name).unlink(missing_ok=True)
 
