@@ -145,10 +145,13 @@ services:
     build:
       context: ..
       dockerfile: airflow/Dockerfile
+    # The other services start only when this one exits 0, so the script stops at its first failed command: without `set -e` a failed migration in
+    # `/entrypoint` was followed by a `chown` that succeeds, and the init reported success (review of U23).
     entrypoint: /bin/bash
     command:
       - -c
       - |
+        set -euo pipefail
         mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
         /entrypoint airflow version
         /entrypoint airflow config list >/dev/null

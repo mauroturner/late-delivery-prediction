@@ -4,6 +4,8 @@ same pins as the command line (U23, AC32, decision D23)."""
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -192,3 +194,31 @@ def test_only_the_init_service_builds_the_image_so_a_cold_build_does_not_race(co
     assert init and re.search(r"build:\s*\n\s*context:\s*\.\.\s*\n\s*dockerfile:\s*airflow/Dockerfile", init.group(1))
     common = re.search(r"^x-airflow-common:\n(.*?)^services:", compose, flags=re.MULTILINE | re.DOTALL)
     assert common and "build:" not in common.group(1) and "image: latedel-airflow:3.4.0" in common.group(1)
+
+
+def init_script(compose: str) -> str:
+    """The shell script the init service runs: the block scalar after ``- |`` under its ``command``."""
+    init = re.search(r"^  airflow-init:\n(.*?)^  # `docker compose --profile debug", compose, flags=re.MULTILINE | re.DOTALL)
+    assert init
+    block = re.search(r"^      - \|\n((?:^        .*\n)+)", init.group(1), flags=re.MULTILINE)
+    assert block
+    return "".join(line[8:] + "\n" for line in block.group(1).splitlines())
+
+
+def test_the_init_script_stops_at_its_first_failed_command(compose):
+    """The other four services start only when the init exits 0 (``service_completed_successfully``). Without ``set -e`` a failed migration in ``/entrypoint`` is
+    followed by a ``chown`` that succeeds, and the script exits 0 (review of U23, R3-airflow-init-script-swallows-failure)."""
+    script = init_script(compose)
+    assert script.splitlines()[0] == "set -euo pipefail"
+    assert script.count("depends_on") == 0 and len(re.findall(r"condition: service_completed_successfully", compose)) == 4
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to run the init script")
+def test_a_failed_migration_makes_the_init_exit_non_zero(compose, tmp_path):
+    """Runs the script with ``/entrypoint`` replaced by a command that fails, as a failed ``airflow db migrate`` does, and ``chown`` by one that succeeds."""
+    stub = 'failed_migration() { echo "migration failed" >&2; return 3; }\n'
+    script = init_script(compose).replace("/opt/airflow", "./airflow").replace("/entrypoint", "failed_migration").replace("chown ", "true ")
+    done = subprocess.run(["bash", "-c", stub + script], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert done.returncode == 3, done.stdout + done.stderr
+    assert done.stderr.count("migration failed") == 1   # the second /entrypoint call never runs
+    assert (tmp_path / "airflow" / "logs").is_dir()   # the commands before the failure did run
