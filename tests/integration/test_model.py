@@ -20,7 +20,14 @@ from latedel.features import LeakageError, build_features, read_order_frames
 from latedel.model import Candidate, importance, make_pipeline, predict_risk, train_model
 from latedel.split import StaleMartError, blocks, labelled_orders
 from latedel.warehouse import connect, rebuild_at
-from tests.fixtures.model_helpers import fixture_test_block, paired_auc_interval, small_cfg
+from latedel.evaluation import paired_bootstrap
+from tests.fixtures.model_helpers import fixture_test_block, small_cfg
+
+
+def _interval(y, a, b, cfg) -> tuple[float, float, float]:
+    """``(difference of AUCs, low, high)`` from the product's own paired bootstrap (U15), with the resamples and the seed of the configuration."""
+    boot = paired_bootstrap(y, a, b, cfg.evaluation.bootstrap_resamples, cfg.evaluation.bootstrap_seed)
+    return boot.diff, boot.ci_low, boot.ci_high
 
 
 def evaluate_control(control) -> dict:
@@ -35,7 +42,7 @@ def evaluate_control(control) -> dict:
     risk, y = predict_risk(trained.model, x), test["is_late"].to_numpy()
     return {
         "trained": trained, "risk": risk, "y": y, "b5": scores["b5_mode_noon"], "b2": scores["b2_mode"], "test_orders": len(test),
-        "vs_b5": paired_auc_interval(y, risk, scores["b5_mode_noon"]), "vs_b2": paired_auc_interval(y, risk, scores["b2_mode"]),
+        "vs_b5": _interval(y, risk, scores["b5_mode_noon"], cfg), "vs_b2": _interval(y, risk, scores["b2_mode"], cfg),
     }
 
 

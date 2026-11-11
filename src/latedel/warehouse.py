@@ -14,6 +14,7 @@ transaction. A delivery that is empty, already loaded, repeats a key or fails a 
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import sqlite3
@@ -139,7 +140,12 @@ def _has_sql(text: str) -> bool:
 
 
 def split_statements(sql_text: str) -> list[str]:
-    """Split a SQL file into statements, keeping semicolons inside strings, comments and triggers."""
+    """Split a SQL file into statements, keeping semicolons inside strings, comments and triggers (the result is a new list: it is cached by text)."""
+    return list(_split_statements(sql_text))
+
+
+@functools.lru_cache(maxsize=256)
+def _split_statements(sql_text: str) -> tuple[str, ...]:
     statements: list[str] = []
     start = 0
     for position, character in enumerate(sql_text):
@@ -150,7 +156,7 @@ def split_statements(sql_text: str) -> list[str]:
             start = position + 1
     if _has_sql(sql_text[start:]):  # a last statement without its semicolon
         statements.append(sql_text[start:].strip())
-    return statements
+    return tuple(statements)
 
 
 def run_sql_file(conn: sqlite3.Connection, path: Path, params: Mapping[str, object] | None = None) -> None:
@@ -176,7 +182,14 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def _declared_tables(path: Path) -> dict[str, dict[str, str]]:
-    """``{table: {column: declared type}}`` of a schema file, read by creating its tables in memory."""
+    """``{table: {column: declared type}}`` of a schema file, read by creating its tables in memory (once per version of the file: it is cached by its size and time)."""
+    stat = Path(path).stat()
+    return _declared_tables_cached(str(path), stat.st_size, stat.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=16)
+def _declared_tables_cached(path: str, size: int, mtime_ns: int) -> dict[str, dict[str, str]]:
+    del size, mtime_ns            # only part of the cache key
     scratch = sqlite3.connect(":memory:")
     try:
         for statement in split_statements(Path(path).read_text(encoding="utf-8")):

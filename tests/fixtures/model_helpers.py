@@ -1,7 +1,6 @@
-"""What the tests of the model share: the positive and negative controls built once per session, and a paired bootstrap of the difference of two AUCs.
+"""What the tests of the model share: the positive and negative controls built once per session.
 
-The paired bootstrap here is the test's own, small and independent. The one of the product is ``evaluation.paired_bootstrap`` (U15), which replaces this helper
-in the tests that need the interval of C03 when it exists.
+The interval of C03 in the tests of the controls comes from the product's ``evaluation.paired_bootstrap`` (U15), which replaced the small bootstrap of this module.
 """
 
 from __future__ import annotations
@@ -9,9 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from scipy.stats import rankdata
 
 from latedel.config import PipelineConfig
 from latedel.deliveries import delivery_plan, publish, read_delivery
@@ -72,27 +69,3 @@ def fixture_test_block(control: Control, feature_set: str) -> tuple[pd.DataFrame
     ids = set(merged["order_id"])
     matrix = build_features(frames.orders[frames.orders["order_id"].isin(ids)], frames.order_lines[frames.order_lines["order_id"].isin(ids)], feature_set)
     return merged.set_index("order_id").loc[matrix.index].reset_index(), matrix
-
-
-
-
-def fast_auc(y: np.ndarray, score: np.ndarray) -> float:
-    """The AUC by the rank-sum formula, ties counted by halves (the same value as ``roc_auc_score``)."""
-    ranks = rankdata(score)
-    positives = y == 1
-    n1, n0 = int(positives.sum()), int((~positives).sum())
-    return float((ranks[positives].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
-
-
-def paired_auc_interval(y, a, b, resamples: int = 1000, seed: int = 0) -> tuple[float, float, float]:
-    """``(AUC(a) - AUC(b), low, high)``: the difference and the 2.5 and 97.5 percentiles over `resamples` paired resamples of the orders (the same indices for both)."""
-    y, a, b = np.asarray(y), np.asarray(a), np.asarray(b)
-    rng = np.random.default_rng(seed)
-    diffs = []
-    for _ in range(resamples):
-        ix = rng.integers(0, len(y), len(y))
-        if y[ix].min() == y[ix].max():
-            continue
-        diffs.append(fast_auc(y[ix], a[ix]) - fast_auc(y[ix], b[ix]))
-    low, high = np.percentile(diffs, [2.5, 97.5])
-    return float(fast_auc(y, a) - fast_auc(y, b)), float(low), float(high)

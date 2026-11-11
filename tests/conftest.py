@@ -252,3 +252,75 @@ def real_fitted(cfg, real_launch_db: Path, real_read, tmp_path_factory: pytest.T
     plan = delivery_plan(config.deliveries)
     entries = [publish(spec, real_read[0], folder / "deliveries", source_sha256=config.source.accepted_sha256) for spec in plan[:3]]
     return SimpleNamespace(cfg=config, db=db, result=result, folder=folder, plan=plan, deliveries=folder / "deliveries", entries=entries)
+
+
+# --- the whole history of the synthetic fixture, loaded and scored month by month (U15 onwards) -----------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def history(fitted_launch, delivered, tmp_path_factory: pytest.TempPathFactory):
+    """The fixture's model (``fitted_launch``) with the 14 deliveries after the launch loaded and, for the monthly ones, scored by the frozen model in order.
+
+    ``(cfg, db, folder, plan)`` plus ``snapshots``: ``{delivery_id: path}`` of the database as it was right after each delivery was loaded and scored, so that a test
+    can ask what a later date would have changed. The seal and the models of its configuration are in its own folder (a copy of the launch's): tests that write copy
+    the whole folder with ``copy_history``. Nothing here evaluates anything.
+    """
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from latedel.deliveries import read_delivery
+    from latedel.launch import load_registered_model
+    from latedel.scoring import RunMeta, score_new_orders
+    from latedel.warehouse import connect, load_delivery
+
+    folder = tmp_path_factory.mktemp("history")
+    shutil.copytree(fitted_launch.folder, folder / "launch", dirs_exist_ok=True)
+    base = fitted_launch.cfg
+    cfg = replace(base, paths=replace(base.paths, seal=folder / "launch" / "reports" / "model_seal.json", models_dir=folder / "launch" / "models"))
+    db = folder / "history.sqlite"
+    shutil.copyfile(fitted_launch.db, db)
+    conn = connect(db)
+    registered = load_registered_model(conn, cfg)
+    deliveries, plan, entries = delivered
+    snapshots = {}
+    for index in range(1, len(plan)):
+        spec = plan[index]
+        load_delivery(conn, read_delivery(deliveries, entries[index]), spec, f"run-{spec.delivery_id}", cfg, sha256_json=entries[index].sha256_json)
+        if spec.kind == "monthly":
+            score_new_orders(conn, spec.delivery_id, registered.model, registered.threshold, RunMeta(f"run-{spec.delivery_id}", spec.as_of, registered.model_version))
+        if spec.delivery_id in ("M2017-09", "M2017-10", "M2017-11"):
+            snapshot = folder / f"after_{spec.delivery_id}.sqlite"
+            conn.close()
+            shutil.copyfile(db, snapshot)
+            conn = connect(db)
+            snapshots[spec.delivery_id] = snapshot
+    conn.close()
+    return SimpleNamespace(cfg=cfg, db=db, folder=folder, plan=plan, snapshots=snapshots, config_sha256=fitted_launch.result["config_sha256"])
+
+
+@pytest.fixture()
+def copy_history(history, tmp_path):
+    """Factory: ``copy_history(snapshot=None, costs=None)`` -> ``(conn, cfg)`` on a private copy of the history (or of one of its snapshots) with its own seal and
+    models folder; ``costs`` replaces keys of ``[costs]`` (another configuration than the sealed one)."""
+    from dataclasses import replace
+
+    from latedel.warehouse import connect
+
+    opened = []
+
+    def build(snapshot: str | None = None, costs: dict | None = None):
+        target = tmp_path / f"copy_{len(opened)}"
+        shutil.copytree(history.folder / "launch", target / "launch")
+        db = target / "w.sqlite"
+        shutil.copyfile(history.snapshots[snapshot] if snapshot else history.db, db)
+        cfg = replace(history.cfg, paths=replace(history.cfg.paths, seal=target / "launch" / "reports" / "model_seal.json", models_dir=target / "launch" / "models"))
+        cfg = replace(cfg, evaluation=replace(cfg.evaluation, bootstrap_resamples=200, importance_repeats=1))    # what these tests check does not depend on the count
+        if costs:
+            cfg = replace(cfg, costs=replace(cfg.costs, **costs))
+        conn = connect(db)
+        opened.append(conn)
+        return conn, cfg
+
+    yield build
+    for conn in opened:
+        conn.close()

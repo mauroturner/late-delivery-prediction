@@ -1,5 +1,5 @@
 -- Tables of the model (docs/plan.md, section 5): the registry of the frozen model, the rates of the baselines and the scores. Safe to run repeatedly: nothing is dropped
--- or migrated. The tables of the follow-up and of the evaluation (tracking_monthly, eval_*) are created by the units that first use them.
+-- or migrated. The tables of the follow-up (tracking_monthly) and of the evaluation (eval_*, feature_importance) were added by the units that first used them (U15, U16).
 -- Dates are ISO text (YYYY-MM-DD).
 
 -- The model trained at the launch: where its artifact is, the SHA-256 that the artifact must have to be loaded (M03), what was chosen and with what costs.
@@ -71,3 +71,97 @@ WHEN EXISTS (SELECT 1 FROM model_scores WHERE order_id = NEW.order_id)
 BEGIN
     SELECT RAISE(ABORT, 'model_scores is insert-only');
 END;
+
+-- The tables of the evaluation (U15, docs/plan.md section 5). `seal_state` says whether a row was computed with the sealed configuration ('sealed') or with another
+-- one ('post_seal', reported apart and never replacing a sealed row, D17). The sealed rows of the test are written once; every other row of a scope is replaced when
+-- the same evaluation is repeated.
+CREATE TABLE IF NOT EXISTS eval_metrics (
+    scope               TEXT NOT NULL CHECK (scope IN ('valid_v2', 'test', 'post_break')),
+    method              TEXT NOT NULL,
+    metric              TEXT NOT NULL,
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    value               REAL,            -- NULL where the metric is not defined (no order flagged, no late order)
+    PRIMARY KEY (scope, method, metric, seal_state)
+);
+
+CREATE TABLE IF NOT EXISTS eval_bootstrap (
+    comparison          TEXT NOT NULL,   -- for example model_vs_b2_mode
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    diff                REAL,
+    ci_low              REAL,
+    ci_high             REAL,
+    resamples           INTEGER NOT NULL,
+    discarded           INTEGER NOT NULL,
+    seed                INTEGER NOT NULL,
+    PRIMARY KEY (comparison, seal_state)
+);
+
+CREATE TABLE IF NOT EXISTS eval_criteria (
+    criterion_id        TEXT NOT NULL,
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    scope               TEXT NOT NULL CHECK (scope IN ('test', 'post_break')),
+    name_es             TEXT NOT NULL,
+    value               REAL,
+    baseline_value      REAL,
+    ci_low              REAL,
+    ci_high             REAL,
+    threshold_es        TEXT NOT NULL,
+    passed              INTEGER CHECK (passed IN (0, 1)),   -- NULL for C10, which has no threshold
+    seen_by_research    TEXT NOT NULL,
+    seen_by_planner     TEXT NOT NULL,
+    verdict_es          TEXT NOT NULL,
+    PRIMARY KEY (criterion_id, seal_state)
+);
+
+CREATE TABLE IF NOT EXISTS eval_sensitivity (
+    break_even          REAL NOT NULL,
+    method              TEXT NOT NULL,
+    scope               TEXT NOT NULL CHECK (scope IN ('valid_v2', 'test')),
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    threshold           REAL NOT NULL,
+    nb_total            REAL NOT NULL,
+    nb_per_1000         REAL NOT NULL,
+    flagged_share       REAL NOT NULL,
+    orders              INTEGER NOT NULL,
+    PRIMARY KEY (break_even, method, scope, seal_state)
+);
+
+CREATE TABLE IF NOT EXISTS eval_roc (
+    scope               TEXT NOT NULL CHECK (scope IN ('valid_v2', 'test', 'post_break')),
+    method              TEXT NOT NULL,
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    point               INTEGER NOT NULL,
+    fpr                 REAL NOT NULL,
+    tpr                 REAL NOT NULL,
+    PRIMARY KEY (scope, method, seal_state, point)
+);
+
+CREATE TABLE IF NOT EXISTS eval_calibration (
+    scope               TEXT NOT NULL CHECK (scope IN ('valid_v2', 'test', 'post_break')),
+    method              TEXT NOT NULL,
+    seal_state          TEXT NOT NULL CHECK (seal_state IN ('sealed', 'post_seal')),
+    bin                 INTEGER NOT NULL,
+    p_mean              REAL NOT NULL,
+    observed            REAL NOT NULL,
+    orders              INTEGER NOT NULL,
+    PRIMARY KEY (scope, method, seal_state, bin)
+);
+
+-- What each column that gives the result away does to the AUC on V2, next to the reference of the shipping mode alone (written at the launch, D31).
+CREATE TABLE IF NOT EXISTS eval_leakage (
+    source_column       TEXT PRIMARY KEY,
+    column_es           TEXT NOT NULL,
+    kind                TEXT NOT NULL,   -- reference, target-derived, outcome or profit
+    known_at_es         TEXT NOT NULL,
+    auc_with_mode_valid REAL NOT NULL,
+    note_es             TEXT NOT NULL,
+    sort_order          INTEGER NOT NULL
+);
+
+-- Permutation importance of the variables of the model in use on V2 (written at the launch).
+CREATE TABLE IF NOT EXISTS feature_importance (
+    feature             TEXT PRIMARY KEY,
+    feature_es          TEXT NOT NULL,
+    auc_drop            REAL NOT NULL,
+    sort_order          INTEGER NOT NULL
+);
