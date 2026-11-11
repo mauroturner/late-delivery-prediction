@@ -673,13 +673,14 @@ def evaluate(conn: sqlite3.Connection, cfg: PipelineConfig, *, run_key: str, as_
 
     `config_sha256` is the fingerprint of the configuration of this run (``fit_model`` returns it). With the sealed configuration the first evaluation of the test
     writes the part of the test of the seal and the rows ``sealed``; a repetition must reproduce them (``SealMismatchError``, R7). With another configuration
-    the values are stored as ``post_seal`` and the sealed ones are not touched. A test already evaluated is not recomputed: the stored criteria stay.
+    the values are stored as ``post_seal`` and the sealed ones are not touched. A test already evaluated is not recomputed: the stored criteria stay. A test that the
+    seal calls another configuration although the fingerprint is the sealed one (a key outside it changed a sealed value, D89) makes the whole run ``post_seal``: its
+    V2 and post-break rows too, so V2 is stored after the test is decided.
     """
     apply_schema(conn)
     state = seal_state(cfg.paths.seal, config_sha256)
     label = "sealed" if state == "match" else "post_seal"
     valid = evaluate_block(conn, "valid_v2", cfg, as_of=as_of)
-    store_evaluation(conn, valid, label)
 
     test = criteria = test_seal = None
     sealed = read_seal(cfg.paths.seal)
@@ -690,8 +691,11 @@ def evaluate(conn: sqlite3.Connection, cfg: PipelineConfig, *, run_key: str, as_
         criteria = evaluate_criteria(test, cfg)
         test_seal = write_test_seal(cfg.paths.seal, seal_payload(criteria, test, run_key=run_key, as_of=as_of, config_sha256=config_sha256))
         kept = "sealed" if test_seal in ("written", "unchanged") else "post_seal"
+        if kept == "post_seal":
+            label = "post_seal"
         store_evaluation(conn, test, kept)
         store_criteria(conn, criteria, kept)
+    store_evaluation(conn, valid, label)
     post = c10 = None
     if is_post_break_ready(cfg, as_of):
         post = evaluate_block(conn, "post_break", cfg, as_of=as_of)

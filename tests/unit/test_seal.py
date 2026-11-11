@@ -6,6 +6,7 @@ Every seal here is written in a temporary folder; the seal of the project (``rep
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import replace
 from datetime import date
@@ -263,3 +264,72 @@ def test_a_write_that_fails_leaves_the_seal_as_it_was_and_no_temporary_file(cfg,
 
 def test_the_seal_of_the_project_is_not_written_by_the_tests(project_seal_unchanged):
     assert project_seal_unchanged(), "the real run (U25) writes it; no test writes or changes it"
+
+
+# --- B4 of the evaluation of eef9bea: keys outside the fingerprint that change a sealed value (decision D89) ------------------------------------------------
+
+
+def full_test_part(cfg, **values) -> dict:
+    """A part of the test with the values that keys outside ``config_sha256`` change: the intervals of C02 and C03, C03 itself, C05, C06, C09, the ECE and B5."""
+    criteria = [
+        {"id": "C01", "value": 0.773, "baseline_value": 0.742, "ci_low": None, "ci_high": None, "passed": True},
+        {"id": "C02", "value": 0.031, "baseline_value": 0.0, "ci_low": 0.026, "ci_high": 0.036, "passed": True},
+        {"id": "C03", "value": -0.0006, "baseline_value": 0.0, "ci_low": -0.006, "ci_high": 0.005, "passed": False},
+        {"id": "C05", "value": 1459.35, "baseline_value": 1467.27, "ci_low": None, "ci_high": None, "passed": False},
+        {"id": "C06", "value": 0.0156, "baseline_value": 0.03, "ci_low": None, "ci_high": None, "passed": True},
+        {"id": "C09", "value": 17.0, "baseline_value": 17.0, "ci_low": None, "ci_high": None, "passed": True},
+    ]
+    metrics = {
+        "model": {"auc": 0.773, "ece": 0.0156, "nb_per_1000": 1459.35}, "b2_mode": {"auc": 0.742, "ece": 0.0025},
+        "b5_mode_noon": {"auc": 0.7737, "ece": 0.0059, "threshold": 0.8, "nb_per_1000": 1467.27, "late_rate": 0.57},
+    }
+    return {"run_key": "run-M2017-10", "as_of": "2017-10-31", "config_sha256": launch_for(cfg)["config_sha256"], "criteria": criteria, "metrics": metrics, **values}
+
+
+def changed_part(cfg, criteria: dict | None = None, metrics: dict | None = None) -> dict:
+    """``full_test_part`` with some fields of some criteria (``{"C09": {"value": 9.0}}``) and some metrics (``{"b5_mode_noon": {"auc": 0.76}}``) changed."""
+    part = full_test_part(cfg)
+    for entry in part["criteria"]:
+        entry.update((criteria or {}).get(entry["id"], {}))
+    for method, values in (metrics or {}).items():
+        part["metrics"][method].update(values)
+    return part
+
+
+UNHASHED_CHANGES = {   # what each key changes in a test evaluated with it, the rest of the configuration being the sealed one
+    "[costs] sensitivity_step": {"criteria": {"C09": {"value": 9.0, "baseline_value": 9.0}}},
+    "[costs] threshold_min": {"criteria": {"C05": {"baseline_value": 1460.1}, "C09": {"value": 15.0, "passed": False}}, "metrics": {"b5_mode_noon": {"threshold": 0.75, "nb_per_1000": 1460.1}}},
+    "[evaluation] bootstrap_seed": {"criteria": {"C02": {"ci_low": 0.0264, "ci_high": 0.0359}, "C03": {"ci_low": -0.0061, "ci_high": 0.0048}}},
+    "[evaluation] calibration_bins": {"criteria": {"C06": {"value": 0.0181}}, "metrics": {"model": {"ece": 0.0181}, "b2_mode": {"ece": 0.0031}, "b5_mode_noon": {"ece": 0.0064}}},
+    "[features] noon_hour": {"criteria": {"C03": {"value": -0.01, "ci_low": -0.02, "ci_high": -0.001}, "C05": {"baseline_value": 1490.2}}, "metrics": {"b5_mode_noon": {"auc": 0.783, "nb_per_1000": 1490.2}}},
+}
+
+
+@pytest.mark.parametrize("key", sorted(UNHASHED_CHANGES))
+def test_a_sealed_value_that_a_key_outside_the_fingerprint_changes_is_post_seal_and_not_a_failed_reproduction(cfg, tmp_path, caplog, key):
+    """B4: ``config_sha256`` hashes three keys of ``[costs]``, nothing of ``[evaluation]`` and not ``noon_hour``. A replay with ``[costs] sensitivity_step = 0.1`` (or
+    ``threshold_min = 0.5``, or ``bootstrap_seed = 1``) was taken for the sealed configuration and stopped at M2017-10 with «SealMismatchError: la evaluación de la prueba
+    con la configuración sellada no reproduce…»: another configuration reported as a failed reproduction. A difference only in values that such a key changes is another
+    configuration: ``post_seal``, the seal left as it is, and the warning names the key."""
+    path = tmp_path / "seal.json"
+    write_launch_seal(path, launch_for(cfg))
+    write_test_seal(path, full_test_part(cfg))
+    sealed = path.read_bytes()
+    with caplog.at_level(logging.WARNING, logger="latedel.registry"):
+        assert write_test_seal(path, changed_part(cfg, **UNHASHED_CHANGES[key])) == "post_seal"
+    assert path.read_bytes() == sealed
+    [warning] = [r.getMessage() for r in caplog.records if r.name == "latedel.registry" and "post_seal" in r.getMessage()]
+    assert key in warning and "another configuration" in warning
+
+
+def test_a_value_that_only_the_fingerprinted_configuration_decides_still_fails_and_the_error_names_it(cfg, tmp_path):
+    """The reproduction check stays for every value that no key outside the fingerprint changes (here the model's AUC): it fails with the values that differ named,
+    even when a value of another configuration differs too."""
+    path = tmp_path / "seal.json"
+    write_launch_seal(path, launch_for(cfg))
+    write_test_seal(path, full_test_part(cfg))
+    sealed = path.read_bytes()
+    for part in (changed_part(cfg, metrics={"model": {"auc": 0.78}}), changed_part(cfg, criteria={"C09": {"value": 9.0}, "C01": {"passed": False}})):
+        with pytest.raises(SealMismatchError, match=r"no reproduce.*(model\.auc|C01\.passed).*R7"):
+            write_test_seal(path, part)
+    assert path.read_bytes() == sealed

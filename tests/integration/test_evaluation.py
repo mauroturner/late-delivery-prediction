@@ -426,3 +426,25 @@ def test_the_sealed_criteria_rebuilt_from_the_project_s_seal_are_the_rows_of_its
     assert criteria_table(text) == criteria_table(versioned)[:9]
     test_table = text[text.index("**Prueba"):].split("\n\n")[1]
     assert test_table in versioned and text.splitlines()[2] == versioned.splitlines()[2]
+
+
+# --- B4 of the evaluation of eef9bea: a rebuild with a key outside the fingerprint changed (decision D89) ------------------------------------------------------
+
+
+@pytest.mark.parametrize("change", [{"costs": {"sensitivity_step": 0.1}}, {"evaluation": {"bootstrap_seed": 1}}], ids=["sensitivity_step", "bootstrap_seed"])
+def test_a_rebuild_with_a_key_outside_the_fingerprint_changed_is_post_seal_and_finishes(copy_evaluated, change):
+    """B4, the evaluator's repro on the fixture: a replay from scratch with ``[costs] sensitivity_step = 0.1`` or ``[evaluation] bootstrap_seed = 1`` failed at the
+    first evaluation of the test with ``SealMismatchError``, so the post-seal analysis could not finish. It finishes as post-seal: every row of the run under
+    ``post_seal`` (V2 included), no sealed row, and the seal byte for byte as it was."""
+    conn, cfg, _first = copy_evaluated
+    seal = cfg.paths.seal.read_bytes()
+    for table in EVAL_TABLES:
+        conn.execute(f"DELETE FROM {table}")
+    other = cfg
+    for section, values in change.items():
+        other = replace(other, **{section: replace(getattr(other, section), **values)})
+    outcome = run_evaluate(conn, other, date(2017, 10, 31), run_key="run-other")
+    assert outcome.test_seal == "post_seal" and outcome.label == "post_seal" and outcome.test is not None
+    assert cfg.paths.seal.read_bytes() == seal
+    assert load_criteria(conn, "sealed") == [] and conn.execute("SELECT COUNT(*) FROM eval_metrics WHERE seal_state = 'sealed'").fetchone()[0] == 0
+    assert {c.criterion_id for c in load_criteria(conn, "post_seal")} == {f"C0{i}" for i in range(1, 10)}

@@ -10,6 +10,11 @@ the fingerprint of the scores of V2) when the model is trained, and ``test`` (th
 is the SHA-256 of the canonical JSON of ``launch`` without ``run_key``, ``valid_v2_scores_sha256`` and itself. A run with another configuration than the sealed
 one (another threshold, other costs, other variables, another model) is ``post_seal``: it is reported apart and never replaces what was sealed (M05). A sealed
 file is never rewritten with other values; a rebuild with the same configuration that does not reproduce the sealed values fails (runbook R7).
+
+Some keys that ``config_sha256`` does not hash change values of the part of the test: the evaluation applies them, not the launch (the grids of the threshold and
+of the sensitivity, the bootstrap, the bins of the calibration, the noon cut of B5). ``unhashed_inputs`` names them for each sealed value. A test whose every value
+that only the fingerprinted configuration decides is reproduced, and that differs only where such a key acts, is another configuration and is ``post_seal`` too; a
+difference anywhere else is a failed reproduction (B4 of the evaluation of ``eef9bea``, decision D89). ``config_sha256`` and the seal stay as they are.
 """
 
 from __future__ import annotations
@@ -296,6 +301,54 @@ def write_launch_seal(seal_path: Path, launch: Mapping[str, Any]) -> Literal["wr
     return "unchanged"
 
 
+# --- what config_sha256 does not cover --------------------------------------------------------------------------------------------------------------------
+
+_THRESHOLD_GRID = ("[costs] threshold_min", "[costs] threshold_max", "[costs] threshold_step")    # B5's own threshold and the thresholds of the sensitivity, on V2
+_SENSITIVITY = ("[costs] sensitivity_min", "[costs] sensitivity_max", "[costs] sensitivity_step")
+_BOOTSTRAP = ("[evaluation] bootstrap_resamples", "[evaluation] bootstrap_seed")
+_BINS = ("[evaluation] calibration_bins",)
+_NOON = ("[features] noon_hour",)
+_UNHASHED_CRITERIA: dict[str, tuple[str, ...]] = {
+    "C02.ci_low": _BOOTSTRAP, "C02.ci_high": _BOOTSTRAP, "C02.passed": _BOOTSTRAP,
+    "C03.value": _NOON, "C03.ci_low": _NOON + _BOOTSTRAP, "C03.ci_high": _NOON + _BOOTSTRAP, "C03.passed": _NOON + _BOOTSTRAP,
+    "C05.baseline_value": _NOON + _THRESHOLD_GRID, "C05.passed": _NOON + _THRESHOLD_GRID,
+    "C06.value": _BINS, "C06.passed": _BINS,
+    "C09.value": _SENSITIVITY + _THRESHOLD_GRID, "C09.baseline_value": _SENSITIVITY, "C09.passed": _SENSITIVITY + _THRESHOLD_GRID,
+}
+_B5_CUT = ("threshold", "flagged_share", "precision", "recall", "nb_total", "nb_per_1000")       # what B5's own threshold changes
+_SAME_FOR_EVERY_METHOD = ("orders", "late_rate", "topk_k")                                        # the block and the k alerts of B2: not B5's
+
+
+def unhashed_inputs(path: str) -> tuple[str, ...]:
+    """The keys outside ``config_sha256`` that change the sealed value at `path` (``C03.ci_low``, ``b5_mode_noon.auc``): empty for a value that only the fingerprinted
+    configuration, the data and the model decide, where a difference is a failed reproduction (runbook R7)."""
+    if path in _UNHASHED_CRITERIA:
+        return _UNHASHED_CRITERIA[path]
+    method, _, metric = path.partition(".")
+    if method == "b5_mode_noon" and metric not in _SAME_FOR_EVERY_METHOD:
+        return _NOON + (_BINS if metric == "ece" else ()) + (_THRESHOLD_GRID if metric in _B5_CUT else ())
+    return _BINS if metric == "ece" else ()
+
+
+_ABSENT = object()
+
+
+def _flat_test(part: Mapping[str, Any]) -> dict[str, Any]:
+    """The values of a part of the test by path: ``<criterion>.<field>`` and ``<method>.<metric>``, rounded to ``SEAL_DECIMALS``."""
+    flat: dict[str, Any] = {}
+    for entry in part.get("criteria") or []:
+        flat.update({f"{entry.get('id')}.{key}": value for key, value in entry.items() if key != "id"})
+    for method, values in (part.get("metrics") or {}).items():
+        flat.update({f"{method}.{metric}": value for metric, value in (values or {}).items()})
+    return _rounded(flat)
+
+
+def differing_values(sealed: Mapping[str, Any], test: Mapping[str, Any]) -> list[str]:
+    """The paths whose values differ, to 6 decimals, between two parts of the test (a value present in one only differs too)."""
+    a, b = _flat_test(sealed), _flat_test(test)
+    return sorted(path for path in set(a) | set(b) if a.get(path, _ABSENT) != b.get(path, _ABSENT))
+
+
 def _rounded(value: Any) -> Any:
     if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
         return value
@@ -312,8 +365,9 @@ def write_test_seal(seal_path: Path, test: Mapping[str, Any]) -> Literal["writte
     """Add the part of the test to the seal, once. Returns what happened.
 
     ``written``: the seal had only the launch and now has `test` too, the launch exactly as it was. ``unchanged``: it already has a test part whose criteria and
-    metrics, rounded to 6 decimals, are these. ``post_seal``: `test` was computed with another configuration than the sealed one; the seal is left as it is. The
-    same configuration with other values is a ``SealMismatchError`` (runbook R7).
+    metrics, rounded to 6 decimals, are these. ``post_seal``: `test` was computed with another configuration than the sealed one (another ``config_sha256``, or the
+    same one with values that differ only where a key outside it acts, ``unhashed_inputs``); the seal is left as it is. Any other difference is a
+    ``SealMismatchError`` that names the values (runbook R7).
     """
     missing = [key for key in TEST_KEYS if key not in test]
     if missing or set(test) - set(TEST_KEYS):
@@ -330,9 +384,21 @@ def write_test_seal(seal_path: Path, test: Mapping[str, Any]) -> Literal["writte
         return "post_seal"
     sealed = document.get("test")
     if sealed is not None:
-        if _rounded({k: sealed[k] for k in ("criteria", "metrics")}) != _rounded({k: test[k] for k in ("criteria", "metrics")}):
-            raise SealMismatchError("la evaluación de la prueba con la configuración sellada no reproduce los valores sellados, redondeados a 6 decimales (docs/runbook.md, R7)")
-        return "unchanged"
+        differ = differing_values(sealed, test)
+        if not differ:
+            return "unchanged"
+        failed = [path for path in differ if not unhashed_inputs(path)]
+        if failed:
+            raise SealMismatchError(
+                "la evaluación de la prueba con la configuración sellada no reproduce los valores sellados, redondeados a 6 decimales: "
+                f"{', '.join(failed[:6])}{' y otros' if len(failed) > 6 else ''} (docs/runbook.md, R7)"
+            )
+        keys = list(dict.fromkeys(key for path in differ for key in unhashed_inputs(path)))
+        logger.warning(
+            "seal: the test differs from the sealed one only in %s, which %s change and config_sha256 does not cover: another configuration, not a failed "
+            "reproduction; stored as post_seal and the seal is left as it is", ", ".join(differ), ", ".join(keys),
+        )
+        return "post_seal"
     write_atomic(path, _dump({**document, "test": dict(test)}))
     # The flow has one writer (D61), but the read above, the decision and this write are not one step: a second writer that started from the same read and wrote another
     # result would have replaced this one without a word. Read it back: if the file does not say what was written, say so.
