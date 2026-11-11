@@ -461,16 +461,17 @@ def local_ctx(cfg, tmp_path, csv: Path):
 
 
 @pytest.fixture(scope="module")
-def fixture_bytes(fixture_csv) -> bytes:
-    return fixture_csv.read_bytes()
+def fixture_bytes(small_csv) -> bytes:
+    """The 300-order fixture that the tests of the task serve and read: what they check (the download, the hash, the streams, the report) does not depend on its size."""
+    return small_csv.read_bytes()
 
 
-def test_fetch_downloads_checks_builds_and_the_second_run_changes_nothing(cfg, tmp_path, fixture_bytes, fixture_truth):
+def test_fetch_downloads_checks_builds_and_the_second_run_changes_nothing(cfg, tmp_path, fixture_bytes, small_truth):
     with FileServer(fixture_bytes) as server:
         ctx = http_ctx(cfg, tmp_path, server, sha(fixture_bytes))
         first = fetch_source(ctx, insecure_hosts=LOCAL)
         assert first["downloaded"] is True and first["built"] is True and first["sha256"] == sha(fixture_bytes)
-        assert first["lines"] == fixture_truth.n_lines and first["orders"] == fixture_truth.n_orders
+        assert first["lines"] == small_truth.n_lines and first["orders"] == small_truth.n_orders
         assert (tmp_path / "raw" / cfg.source.file_name).read_bytes() == fixture_bytes
         assert sorted(p.name for p in (tmp_path / "interim").iterdir()) == ["interim_manifest.json", "order_lines.parquet", "orders.parquet", "outcomes.parquet"]
         assert read_source_manifest(tmp_path / "raw" / MANIFEST_NAME).sha256 == sha(fixture_bytes)
@@ -478,16 +479,16 @@ def test_fetch_downloads_checks_builds_and_the_second_run_changes_nothing(cfg, t
         before = snapshot(tmp_path)
         requests = len(server.requests)
         second = fetch_source(ctx, insecure_hosts=LOCAL)
-        assert second["downloaded"] is False and second["built"] is False and second["orders"] == fixture_truth.n_orders
+        assert second["downloaded"] is False and second["built"] is False and second["orders"] == small_truth.n_orders
         assert len(server.requests) == requests, "the file was there: nothing is downloaded again"
     assert snapshot(tmp_path) == before, "repeating the task changes no byte"
 
 
-def test_fetch_stores_the_source_report_next_to_the_streams(cfg, tmp_path, fixture_bytes, fixture_truth):
+def test_fetch_stores_the_source_report_next_to_the_streams(cfg, tmp_path, fixture_bytes, small_truth):
     with FileServer(fixture_bytes) as server:
         fetch_source(http_ctx(cfg, tmp_path, server, sha(fixture_bytes)), insecure_hosts=LOCAL)
     report = load_source_report(tmp_path / "interim")
-    assert report is not None and report.counts == fixture_truth.expected and report.size_bytes == len(fixture_bytes)
+    assert report is not None and report.counts == small_truth.expected and report.size_bytes == len(fixture_bytes)
     assert report == read_source(tmp_path / "raw" / cfg.source.file_name, cfg)[1]
     assert load_source_report(tmp_path / "nowhere") is None
 
@@ -539,8 +540,8 @@ def test_streams_from_another_source_are_rebuilt(cfg, tmp_path, fixture_bytes, f
     assert interim_fingerprint(tmp_path / "interim") is None
 
 
-def test_a_hash_valid_file_with_invalid_content_is_rejected_by_the_reader_and_writes_no_stream(cfg, tmp_path, malformed):
-    path = malformed("short_row")
+def test_a_hash_valid_file_with_invalid_content_is_rejected_by_the_reader_and_writes_no_stream(cfg, tmp_path, small_malformed):
+    path = small_malformed("short_row")
     data = path.read_bytes()
     with FileServer(data) as server:
         with pytest.raises(SourceError) as error:
@@ -549,10 +550,10 @@ def test_a_hash_valid_file_with_invalid_content_is_rejected_by_the_reader_and_wr
     assert not (tmp_path / "work" / "interim").exists() and not (tmp_path / "work" / "raw" / MANIFEST_NAME).exists()
 
 
-def test_local_mode_registers_the_first_hash_and_rejects_another(cfg, tmp_path, fixture_csv, malformed):
+def test_local_mode_registers_the_first_hash_and_rejects_another(cfg, tmp_path, small_csv, small_malformed):
     csv = tmp_path / "in" / "f.csv"
     csv.parent.mkdir()
-    csv.write_bytes(fixture_csv.read_bytes())
+    csv.write_bytes(small_csv.read_bytes())
     ctx = local_ctx(cfg, tmp_path / "work", csv)
     first = fetch_source(ctx)
     assert first["downloaded"] is False and first["built"] is True and first["csv_path"] == str(csv)
@@ -560,7 +561,7 @@ def test_local_mode_registers_the_first_hash_and_rejects_another(cfg, tmp_path, 
     assert registered.mode == "local" and registered.sha256 == sha(csv.read_bytes())
     again = snapshot(tmp_path / "work")
     assert fetch_source(ctx)["built"] is False and snapshot(tmp_path / "work") == again
-    csv.write_bytes(malformed("wrong_hash").read_bytes())
+    csv.write_bytes(small_malformed("wrong_hash").read_bytes())
     with pytest.raises(SourceError, match=r"^V01:.*registrada") as error:
         fetch_source(ctx)
     assert error.value.problems[0]["expected"] == registered.sha256
@@ -568,9 +569,9 @@ def test_local_mode_registers_the_first_hash_and_rejects_another(cfg, tmp_path, 
     assert [p.name for p in (tmp_path / "work" / "raw").iterdir()] == [MANIFEST_NAME], "the local file is read where it is, never copied into raw"
 
 
-def test_local_mode_registers_nothing_when_the_first_file_is_invalid(cfg, tmp_path, malformed):
+def test_local_mode_registers_nothing_when_the_first_file_is_invalid(cfg, tmp_path, small_malformed):
     csv = tmp_path / "in.csv"
-    csv.write_bytes(malformed("bad_date").read_bytes())
+    csv.write_bytes(small_malformed("bad_date").read_bytes())
     with pytest.raises(SourceError, match="V05"):
         fetch_source(local_ctx(cfg, tmp_path / "work", csv))
     assert snapshot(tmp_path / "work") == {}

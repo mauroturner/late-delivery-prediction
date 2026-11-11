@@ -11,6 +11,7 @@ import json
 import sqlite3
 from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,8 @@ from latedel.launch import fit_model, load_registered_model
 from latedel.registry import SealMismatchError, read_seal, valid_v2_scores_fingerprint
 from latedel.schema import LEAKING_COLUMNS
 from latedel.split import labelled_orders
+from latedel.warehouse import connect
+from tests.conftest import copy_of_history
 
 SOURCE = "ab" * 32
 EVAL_TABLES = ("eval_metrics", "eval_bootstrap", "eval_criteria", "eval_sensitivity", "eval_roc", "eval_calibration")
@@ -44,6 +47,28 @@ EVAL_TABLES = ("eval_metrics", "eval_bootstrap", "eval_criteria", "eval_sensitiv
 def run_evaluate(conn, cfg, as_of: date, *, run_key: str | None = None):
     config_sha256 = fit_model(conn, cfg, run_key=run_key or f"run-{as_of}", as_of=as_of, source_sha256=SOURCE)["config_sha256"]
     return evaluate(conn, cfg, run_key=run_key or f"run-{as_of}", as_of=as_of, config_sha256=config_sha256)
+
+
+@pytest.fixture(scope="module")
+def evaluated(history, tmp_path_factory):
+    """A copy of the history where the test was evaluated once, at 2017-10-31 (the first date its labels are all known): ``(folder, cfg, outcome)``. The tests that
+    start with that first evaluation copy it (``copy_evaluated``) instead of evaluating again; the outcome is the one that first evaluation returned."""
+    folder = tmp_path_factory.mktemp("evaluated")
+    db, cfg = copy_of_history(history.cfg, history.folder / "launch", history.db, folder)
+    conn = connect(db)
+    outcome = run_evaluate(conn, cfg, date(2017, 10, 31))
+    conn.close()
+    return SimpleNamespace(folder=folder, cfg=cfg, outcome=outcome)
+
+
+@pytest.fixture()
+def copy_evaluated(evaluated, history, tmp_path):
+    """``(conn, cfg, outcome)`` on a private copy of ``evaluated``: the warehouse and the seal right after the first evaluation of the test, and what it returned."""
+    db, cfg = copy_of_history(history.cfg, evaluated.folder / "launch", evaluated.folder / "w.sqlite", tmp_path / "copy")
+    assert cfg.evaluation == evaluated.cfg.evaluation and cfg.costs == evaluated.cfg.costs
+    conn = connect(db)
+    yield conn, cfg, evaluated.outcome
+    conn.close()
 
 
 def eval_rows(conn: sqlite3.Connection) -> dict[str, list]:
@@ -116,9 +141,8 @@ def test_registered_rates_are_the_training_rates_and_never_a_later_label(copy_hi
         registered_baseline_rates(conn, cfg)
 
 
-def test_the_first_evaluation_of_the_test_writes_the_sealed_rows_and_the_part_of_the_seal(copy_history):
-    conn, cfg = copy_history()
-    outcome = run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_the_first_evaluation_of_the_test_writes_the_sealed_rows_and_the_part_of_the_seal(copy_evaluated):
+    conn, cfg, outcome = copy_evaluated                                         # right after run_evaluate(conn, cfg, date(2017, 10, 31))
     assert outcome.test is not None and outcome.test_seal == "written" and outcome.label == "sealed" and outcome.post_break is None
     ids = [c.criterion_id for c in outcome.test_criteria]
     assert ids == [f"C0{i}" for i in range(1, 10)]
@@ -149,9 +173,8 @@ def test_the_first_evaluation_of_the_test_writes_the_sealed_rows_and_the_part_of
     assert {r[0] for r in conn.execute("SELECT DISTINCT seal_state FROM eval_criteria")} == {"sealed"}
 
 
-def test_the_test_is_evaluated_once_and_later_runs_leave_it_alone(copy_history):
-    conn, cfg = copy_history()
-    run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_the_test_is_evaluated_once_and_later_runs_leave_it_alone(copy_evaluated):
+    conn, cfg, _first = copy_evaluated                                          # evaluated at 2017-10-31
     before, seal = eval_rows(conn), cfg.paths.seal.read_bytes()
     later = run_evaluate(conn, cfg, date(2017, 11, 30))
     assert later.test is None and later.test_seal is None and later.test_criteria == []
@@ -161,9 +184,8 @@ def test_the_test_is_evaluated_once_and_later_runs_leave_it_alone(copy_history):
     assert [r for r in after["eval_metrics"] if r[0] == "test"] == [r for r in before["eval_metrics"] if r[0] == "test"]
 
 
-def test_a_rebuild_from_scratch_with_the_sealed_configuration_reproduces_the_seal_and_a_different_value_fails(copy_history):
-    conn, cfg = copy_history()
-    run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_a_rebuild_from_scratch_with_the_sealed_configuration_reproduces_the_seal_and_a_different_value_fails(copy_evaluated):
+    conn, cfg, _first = copy_evaluated                                          # evaluated at 2017-10-31
     before, seal = eval_rows(conn), cfg.paths.seal.read_bytes()
     for table in EVAL_TABLES:
         conn.execute(f"DELETE FROM {table}")
@@ -185,9 +207,8 @@ def test_a_rebuild_from_scratch_with_the_sealed_configuration_reproduces_the_sea
     assert conn.execute("SELECT COUNT(*) FROM eval_criteria").fetchone()[0] == 0
 
 
-def test_other_costs_after_the_seal_are_stored_apart_and_never_replace_the_sealed_result(copy_history):
-    conn, cfg = copy_history()
-    run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_other_costs_after_the_seal_are_stored_apart_and_never_replace_the_sealed_result(copy_evaluated):
+    conn, cfg, _first = copy_evaluated                                          # evaluated at 2017-10-31
     sealed_rows, seal = eval_rows(conn), cfg.paths.seal.read_bytes()
 
     other = replace(cfg, costs=replace(cfg.costs, alert_cost=9.0))               # another break-even: 0.9 instead of 0.5
@@ -209,9 +230,8 @@ def test_other_costs_after_the_seal_are_stored_apart_and_never_replace_the_seale
     assert [r for r in eval_rows(conn)["eval_criteria"] if "post_seal" not in r] == [r for r in sealed_rows["eval_criteria"] if "post_seal" not in r]
 
 
-def test_the_sealed_rows_of_the_test_are_written_once_a_repetition_must_reproduce_them(copy_history):
-    conn, cfg = copy_history()
-    outcome = run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_the_sealed_rows_of_the_test_are_written_once_a_repetition_must_reproduce_them(copy_evaluated):
+    conn, cfg, outcome = copy_evaluated                                         # right after run_evaluate(conn, cfg, date(2017, 10, 31))
     before = eval_rows(conn)
     store_evaluation(conn, outcome.test, "sealed")                              # the same values: nothing changes, nothing fails
     assert eval_rows(conn) == before
@@ -286,9 +306,8 @@ def test_the_importance_and_the_demonstration_of_the_leakage_are_stored_at_the_l
         record_launch_tables(conn, cfg, as_of=date(2015, 3, 1))                  # nothing of V2 is known on that date
 
 
-def test_criteria_are_decided_from_the_result_of_the_test_and_a_stored_criterion_reads_back_the_same(copy_history):
-    conn, cfg = copy_history()
-    outcome = run_evaluate(conn, cfg, date(2017, 10, 31))
+def test_criteria_are_decided_from_the_result_of_the_test_and_a_stored_criterion_reads_back_the_same(copy_evaluated):
+    conn, cfg, outcome = copy_evaluated                                         # right after run_evaluate(conn, cfg, date(2017, 10, 31))
     again = evaluate_criteria(outcome.test, cfg)
     assert again == outcome.test_criteria and all(isinstance(c, Criterion) for c in again)
     assert load_criteria(conn, "sealed") == outcome.test_criteria

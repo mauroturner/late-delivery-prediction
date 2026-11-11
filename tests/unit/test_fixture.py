@@ -62,8 +62,9 @@ def when(value: str) -> datetime:
 
 
 @pytest.fixture(scope="module")
-def truth(tmp_path_factory):
-    return make_fixture(tmp_path_factory.mktemp("fx") / "fixture.csv", n_orders=3000, seed=0)
+def truth(fixture_truth):
+    """The session's fixture (3000 orders, seed 0): ``make_fixture`` with the same arguments writes the same bytes (``test_same_seed_same_bytes_and_other_seed_other_bytes``)."""
+    return fixture_truth
 
 
 @pytest.fixture(scope="module")

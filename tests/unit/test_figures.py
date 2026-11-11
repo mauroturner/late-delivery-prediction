@@ -24,11 +24,19 @@ def drawn(site) -> dict:
     return figures.draw_all(site)
 
 
-def test_figures_written_from_fixture_outputs(fixture_site, tmp_path):
-    out = tmp_path / "figures"
+@pytest.fixture(scope="module")
+def written(fixture_site, tmp_path_factory):
+    """The seven files written once from the site files of the fixture into a folder that held a figure of an earlier run: ``(folder, paths, {name: bytes})``.
+    The tests that compare a drawing with another one compare with these bytes, so each draws once instead of twice."""
+    out = tmp_path_factory.mktemp("written") / "figures"
     out.mkdir()
     (out / "split.png").write_bytes(b"old")   # a figure of an earlier run is replaced, not appended to
     paths = figures.make_figures(fixture_site, out)
+    return out, paths, {p.name: p.read_bytes() for p in paths}
+
+
+def test_figures_written_from_fixture_outputs(written):
+    out, paths, _bytes = written
     assert [p.name for p in paths] == EXPECTED == list(figures.FIGURE_NAMES)
     assert sorted(p.name for p in out.iterdir()) == sorted(EXPECTED)   # nothing else, not even a temporary file
     for path in paths:
@@ -38,19 +46,19 @@ def test_figures_written_from_fixture_outputs(fixture_site, tmp_path):
         assert width >= 900 and height >= 450   # readable in a README at full width
 
 
-def test_drawing_twice_gives_the_same_files(fixture_site, tmp_path):
-    first = [p.read_bytes() for p in figures.make_figures(fixture_site, tmp_path / "a")]
+def test_drawing_twice_gives_the_same_files(fixture_site, written, tmp_path):
+    first = [written[2][name] for name in EXPECTED]                                       # the first drawing, by the module fixture
     second = [p.read_bytes() for p in figures.make_figures(fixture_site, tmp_path / "b")]
     assert first == second   # a versioned figure changes only when the data does
 
 
-def test_a_figure_changes_when_its_data_change(fixture_site, tmp_path):
+def test_a_figure_changes_when_its_data_change(fixture_site, written, tmp_path):
     changed = tmp_path / "site"
     shutil.copytree(fixture_site, changed)
     document = json.loads((changed / "alerts.json").read_text(encoding="utf-8"))
     document["monthly"][-1]["alerts"] += 100
     (changed / "alerts.json").write_text(json.dumps(document), encoding="utf-8")
-    original = {p.name: p.read_bytes() for p in figures.make_figures(fixture_site, tmp_path / "a")}
+    original = written[2]                                                                 # the drawing of the unchanged files
     new = {p.name: p.read_bytes() for p in figures.make_figures(changed, tmp_path / "b")}
     assert {name for name in EXPECTED if original[name] != new[name]} == {"alerts.png"}
 

@@ -387,10 +387,10 @@ def all_docs(folder: Path) -> dict[str, object]:
 
 
 @pytest.fixture(scope="module")
-def site(star_export, tmp_path_factory) -> Path:
-    folder = tmp_path_factory.mktemp("site")
-    export_site(star_export.conn, folder, META, star_export.cfg)
-    return folder
+def site(fixture_site, star_export) -> Path:
+    """The five files of the fixture warehouse, written once per session by ``fixture_site`` with this module's ``META`` (no test writes into the folder)."""
+    assert star_export.meta == META
+    return fixture_site
 
 
 @pytest.fixture(scope="module")
@@ -449,8 +449,9 @@ def test_no_identifier_or_sentinel_and_small_cells_suppressed(star_export, site,
     assert minimum == 20
     for size in (minimum, 120, 10**9):
         cfg = replace(star_export.cfg, site=replace(star_export.cfg.site, min_cell_orders=size))
-        folder = tmp_path / f"min{size}"
-        export_site(star_export.conn, folder, META, cfg)
+        folder = site if size == minimum else tmp_path / f"min{size}"      # the files with the minimum of the configuration are the module's
+        if size != minimum:
+            export_site(star_export.conn, folder, META, cfg)
         cells = 0
         for name in SITE_FILES:
             for path, value in objects(json.loads((folder / name).read_text(encoding="utf-8"))):

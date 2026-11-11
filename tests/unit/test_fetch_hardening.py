@@ -130,8 +130,8 @@ def test_the_task_passes_the_configured_deadline_and_a_deadline_writes_nothing(c
     assert snapshot(tmp_path) == {}
 
 
-def test_the_task_reports_how_long_the_download_took(cfg, tmp_path, fixture_csv):
-    data = fixture_csv.read_bytes()
+def test_the_task_reports_how_long_the_download_took(cfg, tmp_path, small_csv):
+    data = small_csv.read_bytes()
     with FileServer(data) as server:
         result = fetch_source(http_ctx(cfg, tmp_path, server, hashlib.sha256(data).hexdigest()), insecure_hosts=LOCAL)
         again = fetch_source(http_ctx(cfg, tmp_path, server, hashlib.sha256(data).hexdigest()), insecure_hosts=LOCAL)
@@ -175,8 +175,8 @@ def test_the_task_does_not_accept_a_partial_content_answer_either(cfg, tmp_path)
 
 
 @pytest.mark.parametrize("vanishes_at", [1, 2, 3])
-def test_a_stored_report_that_is_not_there_when_read_makes_the_task_rebuild_not_fail(cfg, tmp_path, fixture_csv, monkeypatch, vanishes_at):
-    data = fixture_csv.read_bytes()
+def test_a_stored_report_that_is_not_there_when_read_makes_the_task_rebuild_not_fail(cfg, tmp_path, small_csv, monkeypatch, vanishes_at):
+    data = small_csv.read_bytes()
     with FileServer(data) as server:
         ctx = http_ctx(cfg, tmp_path, server, hashlib.sha256(data).hexdigest())
         first = fetch_source(ctx, insecure_hosts=LOCAL)

@@ -54,12 +54,30 @@ def fixture_csv(fixture_truth) -> Path:
 
 
 @pytest.fixture(scope="session")
-def small_csv(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A valid synthetic CSV of 300 orders (seed 0), for the tests that change one cell or one row of the file and read the result: a defect in one row is found by the
-    same code whatever the size of the rest, and the 3000-order file costs ten times as much to read. Tests that count what the file holds use ``fixture_csv``."""
+def small_truth(tmp_path_factory: pytest.TempPathFactory):
+    """A valid synthetic CSV of 300 orders (seed 0) and what it contains, for the tests that change one cell or one row of the file and read the result: a defect in one
+    row is found by the same code whatever the size of the rest, and the 3000-order file costs ten times as much to read. Tests that count what the file holds, or need
+    thousands of rows, use ``fixture_csv``."""
     from tests.fixtures.make_fixture import make_fixture
 
-    return make_fixture(tmp_path_factory.mktemp("small_fixture") / "small_fixture.csv", n_orders=300, seed=0).path
+    return make_fixture(tmp_path_factory.mktemp("small_fixture") / "small_fixture.csv", n_orders=300, seed=0)
+
+
+@pytest.fixture(scope="session")
+def small_csv(small_truth) -> Path:
+    return small_truth.path
+
+
+@pytest.fixture()
+def small_malformed(small_csv: Path, tmp_path: Path) -> Callable[[str], Path]:
+    """Factory: small_malformed(kind) -> path of a copy, in this test's folder, of the 300-order fixture damaged in the given way (for the tests that look at what
+    reading a damaged file does to the folder, which does not depend on the size of the file)."""
+    from tests.fixtures.make_fixture import make_malformed
+
+    def build(kind: str) -> Path:
+        return make_malformed(small_csv, kind, tmp_path / f"small_{kind}.csv")
+
+    return build
 
 
 @pytest.fixture(scope="session")
@@ -179,24 +197,41 @@ def launch_conn(launch_db: Path, tmp_path: Path):
 
 
 @pytest.fixture(scope="session")
-def loaded_db(cfg, delivered, tmp_path_factory: pytest.TempPathFactory) -> Callable[[int], Path]:
+def loaded_db(loaded_masters) -> Callable[[int], Path]:
     """Factory: ``loaded_db(upto)`` -> a warehouse of the synthetic fixture with its first ``upto`` deliveries loaded through the runner, built once per ``upto``.
 
     The file is a master that no test opens: tests that read or write it take a private copy with ``loaded_copy``. The tests of the load itself (what a failed check
     leaves, what a repeated load changes, the content of two loads from scratch) still load for themselves.
     """
-    from latedel.warehouse import connect
-    from tests.fixtures.helpers import load_through
+    return lambda upto: loaded_masters(upto)[0]
 
-    built: dict[int, Path] = {}
 
-    def build(upto: int) -> Path:
+@pytest.fixture(scope="session")
+def loaded_masters(cfg, delivered, tmp_path_factory: pytest.TempPathFactory) -> Callable[[int], tuple[Path, object]]:
+    """Factory: ``loaded_masters(upto)`` -> ``(master file, LoadResult of its last load)``, built once per ``upto`` (what ``loaded_db`` gives the file of).
+
+    A master is built from the largest master already built below it: a copy of that file and the deliveries after it, loaded through the runner. The load is
+    deterministic (``test_loading_from_scratch_twice_gives_the_same_content`` and ``test_a_master_built_on_a_smaller_one_is_the_warehouse_a_load_from_scratch_gives``
+    check it), so the master is the warehouse that loading the first ``upto`` deliveries from scratch gives.
+    """
+    from latedel.deliveries import read_delivery
+    from latedel.warehouse import connect, load_delivery
+
+    folder_of, plan, entries = delivered
+    built: dict[int, tuple[Path, object]] = {}
+
+    def build(upto: int) -> tuple[Path, object]:
         if upto not in built:
             path = tmp_path_factory.mktemp(f"loaded_{upto}") / "loaded.sqlite"
+            below = max((n for n in built if n < upto), default=0)
+            if below:
+                shutil.copyfile(built[below][0], path)
             conn = connect(path)
-            load_through(conn, delivered, cfg, upto)
+            result = None
+            for index in range(below, upto):
+                result = load_delivery(conn, read_delivery(folder_of, entries[index]), plan[index], f"run-{plan[index].delivery_id}", cfg, sha256_json=entries[index].sha256_json)
             conn.close()
-            built[upto] = path
+            built[upto] = (path, result)
         return built[upto]
 
     return build
@@ -383,25 +418,30 @@ def history(fitted_launch, delivered, tmp_path_factory: pytest.TempPathFactory):
     return SimpleNamespace(cfg=cfg, db=db, folder=folder, plan=plan, snapshots=snapshots, config_sha256=fitted_launch.result["config_sha256"])
 
 
+def copy_of_history(base_cfg, launch: Path, db: Path, target: Path, costs: dict | None = None):
+    """Copy a launch folder (its seal and models) and a database of the history to `target`: ``(database copy, cfg)``, the cfg with the seal and the models of the
+    copy and the small evaluation of the tests of the history (what they check does not depend on the count); ``costs`` replaces keys of ``[costs]``."""
+    from dataclasses import replace
+
+    shutil.copytree(launch, target / "launch")
+    shutil.copyfile(db, target / "w.sqlite")
+    cfg = replace(base_cfg, paths=replace(base_cfg.paths, seal=target / "launch" / "reports" / "model_seal.json", models_dir=target / "launch" / "models"))
+    cfg = replace(cfg, evaluation=replace(cfg.evaluation, bootstrap_resamples=200, importance_repeats=1))
+    if costs:
+        cfg = replace(cfg, costs=replace(cfg.costs, **costs))
+    return target / "w.sqlite", cfg
+
+
 @pytest.fixture()
 def copy_history(history, tmp_path):
     """Factory: ``copy_history(snapshot=None, costs=None)`` -> ``(conn, cfg)`` on a private copy of the history (or of one of its snapshots) with its own seal and
     models folder; ``costs`` replaces keys of ``[costs]`` (another configuration than the sealed one)."""
-    from dataclasses import replace
-
     from latedel.warehouse import connect
 
     opened = []
 
     def build(snapshot: str | None = None, costs: dict | None = None):
-        target = tmp_path / f"copy_{len(opened)}"
-        shutil.copytree(history.folder / "launch", target / "launch")
-        db = target / "w.sqlite"
-        shutil.copyfile(history.snapshots[snapshot] if snapshot else history.db, db)
-        cfg = replace(history.cfg, paths=replace(history.cfg.paths, seal=target / "launch" / "reports" / "model_seal.json", models_dir=target / "launch" / "models"))
-        cfg = replace(cfg, evaluation=replace(cfg.evaluation, bootstrap_resamples=200, importance_repeats=1))    # what these tests check does not depend on the count
-        if costs:
-            cfg = replace(cfg, costs=replace(cfg.costs, **costs))
+        db, cfg = copy_of_history(history.cfg, history.folder / "launch", history.snapshots[snapshot] if snapshot else history.db, tmp_path / f"copy_{len(opened)}", costs)
         conn = connect(db)
         opened.append(conn)
         return conn, cfg
@@ -542,12 +582,32 @@ def pipeline_interrupted(fixture_csv: Path, pipeline_source: Path, tmp_path_fact
 
 
 @pytest.fixture(scope="session")
-def pipeline_closed(fixture_csv: Path, pipeline_interrupted: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The same run resumed from ``render_dashboard`` to the end: the run ``r1`` of the launch, closed."""
+def pipeline_rendered(fixture_csv: Path, pipeline_interrupted: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The same run resumed with ``render_dashboard``: every task of ``r1`` has run but ``report``, the one that closes it (the tests of the close start here)."""
+    from latedel.pipeline import run_all
+
+    root = tmp_path_factory.mktemp("pipeline_rendered") / "p"
+    run_all(relocate(pipeline_interrupted, root, fixture_csv), only=["render_dashboard"], run_key="r1")
+    return root
+
+
+@pytest.fixture(scope="session")
+def pipeline_closed(fixture_csv: Path, pipeline_rendered: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The same run resumed from ``render_dashboard`` to the end (``render_dashboard``, then ``report``): the run ``r1`` of the launch, closed."""
     from latedel.pipeline import run_all
 
     root = tmp_path_factory.mktemp("pipeline_closed") / "p"
-    run_all(relocate(pipeline_interrupted, root, fixture_csv), start="render_dashboard", run_key="r1")
+    run_all(relocate(pipeline_rendered, root, fixture_csv), start="report", run_key="r1")
+    return root
+
+
+@pytest.fixture(scope="session")
+def pipeline_second_tracked(fixture_csv: Path, pipeline_closed: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The launch closed (``r1``) and the run ``r2`` of ``M2017-01`` up to and including ``track``: what the tests of a task that fails at ``evaluate`` start from."""
+    from latedel.pipeline import TASK_IDS, run_all
+
+    root = tmp_path_factory.mktemp("pipeline_second_tracked") / "p"
+    run_all(relocate(pipeline_closed, root, fixture_csv), only=list(TASK_IDS[: TASK_IDS.index("track") + 1]), run_key="r2")
     return root
 
 

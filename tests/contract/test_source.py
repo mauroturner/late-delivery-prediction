@@ -9,6 +9,7 @@ import csv
 import dataclasses
 import io
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -160,19 +161,20 @@ def test_v13_counts_the_lines_whose_amounts_do_not_add_up_to_more_than_a_cent_an
     assert report.counts["V13"] == {"discrepancies": 2}
 
 
-def test_a_file_with_lf_endings_gives_the_same_frames(cfg, fixture_csv, fixture_read, tmp_path):
+def test_a_file_with_lf_endings_gives_the_same_frames(cfg, small_csv, tmp_path):
     lf = tmp_path / "lf.csv"
-    lf.write_bytes(fixture_csv.read_bytes().replace(b"\r\n", b"\n"))
+    lf.write_bytes(small_csv.read_bytes().replace(b"\r\n", b"\n"))
     frames, report = read_source(lf, cfg)
-    pd.testing.assert_frame_equal(frames.orders, fixture_read[0].orders)
-    pd.testing.assert_frame_equal(frames.outcomes, fixture_read[0].outcomes)
-    assert report.counts == fixture_read[1].counts
+    crlf_frames, crlf_report = read_source(small_csv, cfg)
+    pd.testing.assert_frame_equal(frames.orders, crlf_frames.orders)
+    pd.testing.assert_frame_equal(frames.outcomes, crlf_frames.outcomes)
+    assert report.counts == crlf_report.counts
 
 
-def test_reading_writes_nothing_and_leaves_the_global_csv_limit_alone(cfg, fixture_csv, tmp_path):
+def test_reading_writes_nothing_and_leaves_the_global_csv_limit_alone(cfg, small_csv, tmp_path):
     folder = tmp_path / "in"
     folder.mkdir()
-    (folder / "f.csv").write_bytes(fixture_csv.read_bytes())
+    (folder / "f.csv").write_bytes(small_csv.read_bytes())
     before = sorted(p.name for p in folder.iterdir())
     limit = csv.field_size_limit()
     read_source(folder / "f.csv", cfg)
@@ -252,11 +254,11 @@ def test_each_malformed_variant_fails_its_rule(cfg, fixture_csv, fixture_truth, 
         assert error.problems, f"{kind}: the problems are listed"
 
 
-def test_a_rejected_file_writes_nothing_to_interim(cfg, malformed, tmp_path):
+def test_a_rejected_file_writes_nothing_to_interim(cfg, small_malformed, tmp_path):
     interim = tmp_path / "data" / "interim"
     for kind in ("short_row", "unmasked_email", "label_mismatch"):
-        with pytest.raises(SourceError):
-            read_source(malformed(kind), cfg)
+        with pytest.raises(SourceError, match=f"^{MALFORMED_RULES[kind]}:"):
+            read_source(small_malformed(kind), cfg)
     assert not interim.exists() and not list(tmp_path.glob("*.parquet"))
 
 
@@ -326,13 +328,12 @@ def test_v05_a_header_without_rows_is_refused(cfg, tmp_path):
         read_source(only_header, cfg)
 
 
-def test_v05_a_short_row_and_a_date_that_does_not_convert_say_where(cfg, malformed):
-    with pytest.raises(SourceError, match=r"^V05:.*52 campos.*53.*línea \d+") as error:
-        read_source(malformed("short_row"), cfg)
-    assert error.value.problems[0]["count"] == 1
-    with pytest.raises(SourceError, match=r"^V05:.*order date \(DateOrders\).*13/45/2017") as error:
-        read_source(malformed("bad_date"), cfg)
-    assert error.value.problems[0]["column"] == "order date (DateOrders)" and error.value.problems[0]["count"] == 1
+def test_v05_a_short_row_and_a_date_that_does_not_convert_say_where(rejection):
+    error = rejection("short_row")      # the error of reading the damaged file, read once in the session (``rejection`` checks there that it is a SourceError)
+    assert re.search(r"^V05:.*52 campos.*53.*línea \d+", str(error)) and error.problems[0]["count"] == 1
+    error = rejection("bad_date")
+    assert re.search(r"^V05:.*order date \(DateOrders\).*13/45/2017", str(error))
+    assert error.problems[0]["column"] == "order date (DateOrders)" and error.problems[0]["count"] == 1
 
 
 @pytest.mark.parametrize(("name", "value"), [
@@ -377,13 +378,14 @@ def test_v05_a_value_in_a_personal_column_is_refused_without_being_echoed(cfg, t
     assert {p["column"] for p in error.value.problems} == {"Latitude", "Customer Id"}
 
 
-def test_v05_a_field_over_the_csv_limit_and_a_stray_quote_are_rows_that_do_not_parse(cfg, fixture_csv, tmp_path, small_csv):
+def test_v05_a_field_over_the_csv_limit_and_a_stray_quote_are_rows_that_do_not_parse(cfg, tmp_path, small_csv):
     def long_field(table):
         table[9][column("Product Name")] = "x" * 140_000
 
     with pytest.raises(SourceError, match=r"^V05:.*campo"):
         read_source(edited(small_csv, tmp_path, long_field, "long.csv"), cfg)
-    raw = fixture_csv.read_bytes()
+    raw = small_csv.read_bytes()
+    assert b"Consumer" in raw
     broken = raw.replace(b"Consumer", b'"Cons"umer', 1)
     path = tmp_path / "quote.csv"
     path.write_bytes(broken)
@@ -392,8 +394,8 @@ def test_v05_a_field_over_the_csv_limit_and_a_stray_quote_are_rows_that_do_not_p
     assert csv.field_size_limit() == 131072
 
 
-def test_v05_an_empty_line_inside_the_file_is_a_row_without_fields(cfg, fixture_csv, tmp_path):
-    raw = fixture_csv.read_bytes()
+def test_v05_an_empty_line_inside_the_file_is_a_row_without_fields(cfg, small_csv, tmp_path):
+    raw = small_csv.read_bytes()
     first = raw.index(b"\r\n") + 2
     second = raw.index(b"\r\n", first) + 2
     path = tmp_path / "blank.csv"
@@ -402,14 +404,14 @@ def test_v05_an_empty_line_inside_the_file_is_a_row_without_fields(cfg, fixture_
         read_source(path, cfg)
 
 
-def test_v06_names_the_column_and_the_line_but_never_the_value(cfg, malformed):
-    with pytest.raises(SourceError, match=r"^V06:.*Customer Email.*línea \d+") as error:
-        read_source(malformed("unmasked_email"), cfg)
-    assert "ann.smith" not in str(error.value) and "ann.smith" not in repr(error.value.problems)
-    assert error.value.problems[0]["column"] == "Customer Email" and error.value.problems[0]["count"] == 1
-    with pytest.raises(SourceError, match=r"^V06:.*Customer Password") as error:
-        read_source(malformed("unmasked_password"), cfg)
-    assert "hunter2" not in str(error.value) and "hunter2" not in repr(error.value.problems)
+def test_v06_names_the_column_and_the_line_but_never_the_value(rejection):
+    error = rejection("unmasked_email")
+    assert re.search(r"^V06:.*Customer Email.*línea \d+", str(error))
+    assert "ann.smith" not in str(error) and "ann.smith" not in repr(error.problems)
+    assert error.problems[0]["column"] == "Customer Email" and error.problems[0]["count"] == 1
+    error = rejection("unmasked_password")
+    assert re.search(r"^V06:.*Customer Password", str(error))
+    assert "hunter2" not in str(error) and "hunter2" not in repr(error.problems)
 
 
 def test_v06_one_unmasked_row_among_thousands_is_enough_and_all_are_counted(cfg, fixture_csv, tmp_path):
@@ -422,18 +424,18 @@ def test_v06_one_unmasked_row_among_thousands_is_enough_and_all_are_counted(cfg,
     assert error.value.rule_id == "V06" and error.value.problems[0]["count"] == 4 and len(error.value.problems[0]["examples"]) <= 5
 
 
-def test_v07_two_modes_in_an_order_and_a_repeated_item_id(cfg, malformed):
-    with pytest.raises(SourceError, match=r"^V07:.*Shipping Mode.*pedido \d+") as error:
-        read_source(malformed("two_modes_one_order"), cfg)
-    problem = error.value.problems[0]
+def test_v07_two_modes_in_an_order_and_a_repeated_item_id(rejection):
+    error = rejection("two_modes_one_order")
+    assert re.search(r"^V07:.*Shipping Mode.*pedido \d+", str(error))
+    problem = error.problems[0]
     assert problem["kind"] == "order_level_column" and problem["orders"] == 1 and "Shipping Mode" in problem["columns"]
-    with pytest.raises(SourceError, match=r"^V07:.*Order Item Id.*repetid") as error:
-        read_source(malformed("duplicate_item_id"), cfg)
-    assert error.value.problems[0]["kind"] == "duplicate_item_id" and error.value.problems[0]["count"] == 1
+    error = rejection("duplicate_item_id")
+    assert re.search(r"^V07:.*Order Item Id.*repetid", str(error))
+    assert error.problems[0]["kind"] == "duplicate_item_id" and error.problems[0]["count"] == 1
 
 
-def test_v07_a_change_in_a_personal_order_level_column_is_seen_and_not_echoed(cfg, fixture_csv, fixture_truth, tmp_path):
-    order = str(fixture_truth.cases["multi_line_order_id"])
+def test_v07_a_change_in_a_personal_order_level_column_is_seen_and_not_echoed(cfg, small_truth, tmp_path):
+    order = str(small_truth.cases["multi_line_order_id"])
 
     def change(table):
         lines = [row for row in table[1:] if row[column("Order Id")] == order]
@@ -442,36 +444,36 @@ def test_v07_a_change_in_a_personal_order_level_column_is_seen_and_not_echoed(cf
         lines[1][column("Order Zipcode")] = "secret-zip-code"
 
     with pytest.raises(SourceError) as error:
-        read_source(edited(fixture_csv, tmp_path, change), cfg)
+        read_source(edited(small_truth.path, tmp_path, change), cfg)
     assert error.value.rule_id == "V07"
     text = str(error.value) + repr(error.value.problems)
     assert "9999999" not in text and "secret-zip-code" not in text
     assert {"Customer Id", "Order Zipcode"} <= set(error.value.problems[0]["columns"])
 
 
-def test_v08_names_the_order_with_the_wrong_label(cfg, malformed):
-    with pytest.raises(SourceError, match=r"^V08:.*pedido \d+") as error:
-        read_source(malformed("label_mismatch"), cfg)
-    problem = error.value.problems[0]
+def test_v08_names_the_order_with_the_wrong_label(rejection):
+    error = rejection("label_mismatch")
+    assert re.search(r"^V08:.*pedido \d+", str(error))
+    problem = error.problems[0]
     assert problem["count"] == 1 and problem["examples"][0]["order_id"] > 0 and problem["examples"][0]["label"] in (0, 1)
 
 
-def test_v08_cancelled_orders_are_exempt_from_the_label_rule(cfg, fixture_csv, tmp_path, fixture_truth):
-    cancelled = fixture_truth.cases["cancelled_order_id"]
+def test_v08_cancelled_orders_are_exempt_from_the_label_rule(cfg, tmp_path, small_truth):
+    cancelled = small_truth.cases["cancelled_order_id"]
 
     def change(table):
         for row in table[1:]:
             if int(row[column("Order Id")]) == cancelled:
                 row[column("Late_delivery_risk")] = "1" if int(row[column("Days for shipping (real)")]) <= int(row[column("Days for shipment (scheduled)")]) else "0"
 
-    frames, _ = read_source(edited(fixture_csv, tmp_path, change), cfg)
+    frames, _ = read_source(edited(small_truth.path, tmp_path, change), cfg)
     assert bool(frames.outcomes.set_index("order_id").loc[cancelled, "is_cancelled"])
 
 
-def test_v09_names_the_order_and_the_lag(cfg, malformed):
-    with pytest.raises(SourceError, match=r"^V09:.*pedido \d+.*7 días") as error:
-        read_source(malformed("outcome_after_7_days"), cfg)
-    problem = error.value.problems[0]
+def test_v09_names_the_order_and_the_lag(rejection):
+    error = rejection("outcome_after_7_days")
+    assert re.search(r"^V09:.*pedido \d+.*7 días", str(error))
+    problem = error.problems[0]
     assert problem["count"] == 1 and problem["examples"][0]["lag_days"] == 7 and problem["max_allowed_days"] == 6
 
 
@@ -510,12 +512,12 @@ def test_messages_never_carry_a_sentinel_whatever_the_variant(fixture_truth, rej
         assert not any(needle.decode() in text for needle in fixture_truth.sentinel_needles), kind
 
 
-def test_reading_logs_counts_and_never_personal_values(cfg, fixture_csv, fixture_truth, caplog):
+def test_reading_logs_counts_and_never_personal_values(cfg, small_truth, caplog):
     with caplog.at_level(logging.DEBUG, logger="latedel"):
-        read_source(fixture_csv, cfg)
+        read_source(small_truth.path, cfg)
     text = "\n".join(record.getMessage() for record in caplog.records)
-    assert f"{fixture_truth.n_lines} lines" in text and f"{fixture_truth.n_orders} orders" in text
-    assert not any(needle.decode() in text for needle in fixture_truth.sentinel_needles)
+    assert f"{small_truth.n_lines} lines" in text and f"{small_truth.n_orders} orders" in text
+    assert small_truth.sentinel_needles and not any(needle.decode() in text for needle in small_truth.sentinel_needles)
 
 
 def test_the_file_must_exist(cfg, tmp_path):

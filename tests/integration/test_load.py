@@ -143,13 +143,18 @@ def test_the_raw_tables_hold_the_values_of_the_frames(cfg, fixture_read, loaded_
     pd.testing.assert_frame_equal(outcomes, expected.sort_values("order_id").reset_index(drop=True), check_dtype=False)
 
 
-def test_loading_from_scratch_twice_gives_the_same_content(cfg, delivered, tmp_path):
+def test_loading_from_scratch_twice_gives_the_same_content(cfg, delivered, tmp_path, loaded_masters, loaded_copy):
     first, second = connect(tmp_path / "a.sqlite"), connect(tmp_path / "b.sqlite")
     load_through(first, delivered, cfg, 15)
     load_through(second, delivered, cfg, 15)
     for table in TABLES:
         assert dump(first, table) == dump(second, table), table
     assert len(dump(first, "stg_orders")) == 3000
+    # the masters of the session are built on smaller ones (a copy of the file and the deliveries after it): each is the warehouse a load from scratch gives
+    loaded_masters(5)
+    master = loaded_copy(15, "master.sqlite")
+    for table in TABLES:
+        assert dump(master, table) == dump(first, table), table
 
 
 def test_a_delivery_that_is_empty_or_already_loaded_changes_nothing(cfg, delivered, tmp_path):
@@ -203,9 +208,9 @@ def test_a_missing_value_is_refused_not_stored_as_null(cfg, delivered, tmp_path)
 
 
 @pytest.mark.parametrize("upto", [1, 2, 6, 14, 15])
-def test_staging_holds_only_what_is_known_on_the_calculation_date(cfg, delivered, fixture_read, tmp_path, upto):
-    conn = connect(tmp_path / "w.sqlite")
-    result = load_through(conn, delivered, cfg, upto)
+def test_staging_holds_only_what_is_known_on_the_calculation_date(cfg, delivered, fixture_read, upto, loaded_masters, loaded_copy):
+    conn = loaded_copy(upto, "w.sqlite")         # the first `upto` deliveries loaded through the runner, and below the result of the last load
+    result = loaded_masters(upto)[1]
     as_of = delivered[1][upto - 1].as_of
     frames = fixture_read[0]
     orders = frames.orders[frames.orders["order_date"] <= pd.Timestamp(as_of)]

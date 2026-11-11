@@ -1,8 +1,9 @@
 """The tasks, the state of a run and the orderly close of a run (U21, AC11, AC27, AC28, AC34, decisions D35 and D72).
 
 The runs below walk the whole flow over the synthetic fixture (local source, the real warehouse, the real exports). The expensive ones are built once per session in
-``conftest.py`` and copied: ``pipeline_interrupted`` is the launch run killed after its export, ``pipeline_closed`` the same run resumed to the end and
-``pipeline_two_runs`` the launch and the delivery ``M2017-01``. A test that changes things works on a copy.
+``conftest.py`` and copied: ``pipeline_interrupted`` is the launch run killed after its export, ``pipeline_rendered`` the same run with every task but ``report``
+(where the tests of the close start), ``pipeline_closed`` the same run resumed to the end and ``pipeline_two_runs`` the launch and the delivery ``M2017-01``. A test
+that changes things works on a copy.
 """
 
 from __future__ import annotations
@@ -155,9 +156,9 @@ def test_a_monthly_run_records_the_orders_it_scored_and_its_alerts(pipeline_two_
     assert exported_runs(config) == {"r1": "ok", "r2": "ok"} and summary(config)["run_key"] == "r2"
 
 
-def test_the_run_closes_in_the_order_of_closing_steps(pipeline_interrupted, fixture_csv, tmp_path, monkeypatch):
+def test_the_run_closes_in_the_order_of_closing_steps(pipeline_rendered, fixture_csv, tmp_path, monkeypatch):
     """SQLite first, then the run table alone, the summary alone, the HTML, the manifest, and last the state file (D72): what each write finds when it starts."""
-    config = relocate(pipeline_interrupted, tmp_path / "p", fixture_csv)
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)    # every task of r1 has run but report
     events: list[tuple] = []
 
     def probe(name: str):
@@ -173,7 +174,7 @@ def test_the_run_closes_in_the_order_of_closing_steps(pipeline_interrupted, fixt
 
     for name in CLOSING_STEPS:
         probe(name)
-    run_all(config, start="render_dashboard", run_key="r1")
+    run_all(config, start="report", run_key="r1")
     assert tuple(e[0] for e in events) == CLOSING_STEPS == ("sqlite", "run_table", "summary", "html", "manifest")
     assert events == [
         ("sqlite", "running", "running", "running", False, "published", "running"),
@@ -206,14 +207,14 @@ def what_the_files_say(config) -> tuple:
 
 
 @pytest.mark.parametrize("step", CLOSING_STEPS)
-def test_a_process_killed_between_two_closing_writes_leaves_a_window_that_repeating_report_closes(pipeline_interrupted, pipeline_closed, fixture_csv, tmp_path, monkeypatch, step):
+def test_a_process_killed_between_two_closing_writes_leaves_a_window_that_repeating_report_closes(pipeline_rendered, pipeline_closed, fixture_csv, tmp_path, monkeypatch, step):
     """Whatever the step after which the process dies, the state file still says ``running`` (so the run is not closed and ``report`` may run again), every file that
     was not written yet says what it said, and repeating ``report`` leaves the same final state as a run that was never interrupted."""
-    config = relocate(pipeline_interrupted, tmp_path / "p", fixture_csv)
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)
     with monkeypatch.context() as killed:
         kill_the_process_after(killed, step)
         with pytest.raises(Killed):
-            run_all(config, start="render_dashboard", run_key="r1")
+            run_all(config, start="report", run_key="r1")
     assert what_the_files_say(config) == WINDOWS[step]
     # the delivery is still pending for any other run only if the manifest does not say loaded; either way the run itself is open and resumable
     run_all(config, start="report", run_key="r1")
@@ -227,10 +228,10 @@ def test_a_process_killed_between_two_closing_writes_leaves_a_window_that_repeat
 
 
 @pytest.mark.parametrize("step", CLOSING_STEPS[:-1])
-def test_an_error_between_two_closing_writes_marks_the_run_failed_in_every_file_that_exists(pipeline_interrupted, fixture_csv, tmp_path, monkeypatch, step):
+def test_an_error_between_two_closing_writes_marks_the_run_failed_in_every_file_that_exists(pipeline_rendered, fixture_csv, tmp_path, monkeypatch, step):
     """The same windows with an exception instead of a kill: nothing keeps saying ``ok``, SQLite, the run table and the summary say ``failed``, the delivery is not marked
     loaded, and the run resumes from ``report``."""
-    config = relocate(pipeline_interrupted, tmp_path / "p", fixture_csv)
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)
 
     def boom(*args, **kwargs):
         raise RuntimeError(f"boom after {step}")
@@ -238,7 +239,7 @@ def test_an_error_between_two_closing_writes_marks_the_run_failed_in_every_file_
     with monkeypatch.context() as failing:
         failing.setitem(pipeline._CLOSERS, CLOSING_STEPS[CLOSING_STEPS.index(step) + 1], boom)
         with pytest.raises(RuntimeError, match="boom after"):
-            run_all(config, start="render_dashboard", run_key="r1")
+            run_all(config, start="report", run_key="r1")
     status, finished, message, *_ = run_row(config, "r1")
     assert status == "failed" and finished is not None and "boom after" in message
     assert exported_runs(config) == {"r1": "failed"} and summary(config)["status"] == "failed"
@@ -250,10 +251,10 @@ def test_an_error_between_two_closing_writes_marks_the_run_failed_in_every_file_
     assert what_the_files_say(config) == ("ok", "ok", "ok", True, "loaded", "ok")
 
 
-def test_an_error_saving_the_state_file_after_the_close_leaves_every_file_ok_and_the_run_open_for_report(pipeline_interrupted, fixture_csv, tmp_path, monkeypatch):
+def test_an_error_saving_the_state_file_after_the_close_leaves_every_file_ok_and_the_run_open_for_report(pipeline_rendered, fixture_csv, tmp_path, monkeypatch):
     """The state file is the last write: when it is the one that fails, the close itself is complete (all five steps), so no file is rewritten as ``failed`` (the manifest
     already says ``loaded`` and cannot be taken back); the state file keeps ``running`` and repeating ``report`` records the end (D72)."""
-    config = relocate(pipeline_interrupted, tmp_path / "p", fixture_csv)
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)
 
     def disk_full(*args, **kwargs):
         raise OSError("no space left on the device")
@@ -261,7 +262,7 @@ def test_an_error_saving_the_state_file_after_the_close_leaves_every_file_ok_and
     with monkeypatch.context() as failing:
         failing.setattr(pipeline, "_save_task", only_the_report(disk_full))
         with pytest.raises(OSError, match="no space"):
-            run_all(config, start="render_dashboard", run_key="r1")
+            run_all(config, start="report", run_key="r1")
     assert what_the_files_say(config) == WINDOWS["manifest"]
     run_all(config, start="report", run_key="r1")
     assert what_the_files_say(config) == ("ok", "ok", "ok", True, "loaded", "ok")
@@ -614,10 +615,10 @@ def log_of(caplog, text: str) -> list[logging.LogRecord]:
 
 
 @pytest.mark.parametrize("failing_write", ["state_file", "sqlite_row", "exported_files"])
-def test_failure_handler_write_errors_do_not_mask_the_task_error(pipeline_closed, fixture_csv, tmp_path, monkeypatch, caplog, failing_write):
+def test_failure_handler_write_errors_do_not_mask_the_task_error(pipeline_second_tracked, fixture_csv, tmp_path, monkeypatch, caplog, failing_write):
     """The handler that records a failed task writes three things (the state file, the row of SQLite, the exported files) and each one can fail (a full disk, a locked
     database). None of them replaces the error of the task, each failure is logged once with its traceback, and the writes after it are still tried."""
-    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    config = relocate(pipeline_second_tracked, tmp_path / "p", fixture_csv)    # r2 has run up to track; its next task, evaluate, fails
     failing_evaluate(monkeypatch)
     real_write, real_record = pipeline._write_state, pipeline._record
 
@@ -642,7 +643,7 @@ def test_failure_handler_write_errors_do_not_mask_the_task_error(pipeline_closed
     else:
         monkeypatch.setattr(pipeline, "_refresh_exports", unwritable)
     with caplog.at_level("WARNING", logger="latedel.pipeline"), pytest.raises(RuntimeError, match="boom"):   # not the OSError, the OperationalError or the PermissionError
-        run_all(config, run_key="r2")
+        run_all(config, start="evaluate", run_key="r2")
     lost = log_of(caplog, "could not")
     lost = [r for r in lost if r.exc_info is not None and r.exc_info[0] is errors[failing_write]]
     assert len(lost) >= 1 and all(r.exc_info[2] is not None for r in lost)   # logged with its traceback
@@ -663,8 +664,8 @@ def test_failure_handler_write_errors_do_not_mask_the_task_error(pipeline_closed
     assert len(after) == 1
 
 
-def test_a_failed_refresh_after_a_failure_keeps_the_original_error_logs_the_traceback_and_marks_the_exports_stale(pipeline_closed, fixture_csv, tmp_path, monkeypatch, caplog):
-    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+def test_a_failed_refresh_after_a_failure_keeps_the_original_error_logs_the_traceback_and_marks_the_exports_stale(pipeline_second_tracked, fixture_csv, tmp_path, monkeypatch, caplog):
+    config = relocate(pipeline_second_tracked, tmp_path / "p", fixture_csv)
     failing_evaluate(monkeypatch)
 
     def cannot_write(*args, **kwargs):
@@ -672,7 +673,7 @@ def test_a_failed_refresh_after_a_failure_keeps_the_original_error_logs_the_trac
 
     monkeypatch.setattr(pipeline, "export_run_table", cannot_write)
     with caplog.at_level("WARNING", logger="latedel.pipeline"), pytest.raises(RuntimeError, match="boom"):
-        run_all(config, run_key="r2")
+        run_all(config, start="evaluate", run_key="r2")
     assert "PermissionError" in state(config, "r2")["exports_stale"] and state(config, "r2")["status"] == "failed"
     assert any("could not refresh the exported files" in r.getMessage() and r.exc_info for r in caplog.records)
     monkeypatch.undo()
