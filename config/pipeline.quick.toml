@@ -16,10 +16,11 @@ url = ""                             # a local source has no address: this key w
 local_path = "data/quick/dataco_fixture.csv"
 accepted_sha256 = ""
 
-[model]                              # one configuration instead of the grid of eight
-learning_rate = [0.1]
+[model]                              # one configuration instead of the grid of eight, and 50 boosting iterations instead of 300: the quick run is about where the files go and
+learning_rate = [0.1]                # that the flow runs, not about what the model learns, and it is the run that the tests and the Docker test repeat (decision D73)
 max_leaf_nodes = [15]
 min_samples_leaf = [20]
+max_iter = 50
 
 [evaluation]
 bootstrap_resamples = 200
