@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("task", choices=TASK_IDS, metavar="TAREA")
     task.add_argument("--run-key", help="la corrida a la que pertenece (una nueva si se omite)")
 
+    commands.add_parser("figures", parents=[common], help="dibuja las figuras de la documentación (docs/figures/*.png) desde los archivos del sitio de la última corrida")
+
     commands.add_parser("docs-sync", parents=[common], help="copia el resumen de resultados (reports/evaluation_summary.md) en el README")
 
     fixture = commands.add_parser("make-fixture", help="escribe una fuente sintética para pruebas y modo rápido")
@@ -129,6 +131,12 @@ def _execute(args: argparse.Namespace, cfg) -> int:
             raise FileNotFoundError(f"No existe {summary}: corra la tarea report antes de docs-sync")
         changed = sync_results(cfg.paths.readme, summary)
         _say(f"{cfg.paths.readme.name} actualizado" if changed else f"{cfg.paths.readme.name} ya estaba al día")
+        return EXIT_OK
+    if args.command == "figures":
+        from latedel.figures import make_figures   # matplotlib takes about a second to import: only the command that draws pays for it
+
+        for path in make_figures(cfg.paths.site_dir, cfg.paths.figures_dir):
+            _say(f"escribí {path}")
         return EXIT_OK
     if args.command == "task":
         result = run_task(args.task, args.run_key, cfg)

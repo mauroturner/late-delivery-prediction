@@ -203,12 +203,13 @@ def effect_only(project, capsys, tmp_path, monkeypatch):
     assert code == 0 and task_lines(out) == ["fetch_source", "deliver"] and list(json.loads(state.read_text(encoding="utf-8"))["tasks"]) == ["fetch_source", "deliver"]
 
 
-def effect_from(project, capsys, tmp_path, monkeypatch):
-    root, config = project
+def effect_from(launched, capsys, tmp_path, monkeypatch):
+    root, config = launched    # after the launch, so that the run that continues is a monthly one (the launch trains a model and takes seconds more)
     assert main(capsys, "run", "--only", "fetch_source", "deliver", "--config", config, "--run-key", "mine")[0] == 0
     code, out, _ = main(capsys, "run", "--from", "validate", "--config", config, "--run-key", "mine")
     assert code == 0 and task_lines(out) == list(pipeline.TASK_IDS[2:])   # it continued the run, from validate, with the delivery of its own state
-    assert json.loads((root / "interim" / "runs" / "mine.json").read_text(encoding="utf-8"))["status"] == "ok"
+    state = json.loads((root / "interim" / "runs" / "mine.json").read_text(encoding="utf-8"))
+    assert state["status"] == "ok" and state["tasks"]["deliver"]["delivery_id"] == SECOND
 
 
 def effect_run_key(project, capsys, tmp_path, monkeypatch):
@@ -284,12 +285,32 @@ def effect_output(project, capsys, tmp_path, monkeypatch):
     assert main(capsys, "make-fixture", absolute, "--orders", 120)[0] == 0 and absolute.is_file()
 
 
+def effect_figures_config(project, capsys, tmp_path, monkeypatch, fixture_site):
+    """``figures`` reads the site files and writes the figures of the project of ``--config``: with no run yet it says what to run and writes nothing."""
+    root, config = project
+    missing = main(capsys, "figures", "--config", config)
+    assert missing[0] == 2 and "algorithms.json" in missing[2] and "python -m latedel run" in missing[2] and not (root / "figures").exists()
+    shutil.copytree(fixture_site, root / "outputs" / "site")
+    code, out, err = main(capsys, "figures", "--config", config)
+    names = ["split.png", "mode_rates.png", "noon_cutoff.png", "leakage.png", "methods.png", "cost_curve.png", "alerts.png"]
+    assert code == 0 and err == "" and [Path(line.split(" ", 1)[1]).name for line in out.splitlines()] == names
+    assert sorted(p.name for p in (root / "figures").iterdir()) == sorted(names) and all(line.startswith("escribí ") for line in out.splitlines())
+
+
+def effect_figures_verbose(project, capsys, tmp_path, monkeypatch, fixture_site):
+    root, config = project
+    shutil.copytree(fixture_site, root / "outputs" / "site")
+    quiet = main(capsys, "figures", "--config", config)
+    loud = main(capsys, "figures", "--config", config, "-v")
+    assert quiet[0] == loud[0] == 0 and quiet[2] == "" and loud[2].count("INFO latedel.figures: figure ") == 7
+
+
 EFFECTS = {
     "run --config": effect_config, "replay --config": effect_config_relative, "task --config": effect_config, "docs-sync --config": effect_docs_sync,
     "run --verbose": effect_verbose, "replay --verbose": effect_verbose, "task --verbose": effect_verbose, "docs-sync --verbose": effect_verbose,
     "run --only": effect_only, "run --from": effect_from, "run --run-key": effect_run_key, "task --run-key": effect_task_run_key, "task task": effect_task,
     "replay --until": effect_until, "make-fixture --orders": effect_orders, "make-fixture --seed": effect_seed, "make-fixture --signal": effect_signal,
-    "make-fixture output": effect_output,
+    "make-fixture output": effect_output, "figures --config": effect_figures_config, "figures --verbose": effect_figures_verbose,
 }
 
 
@@ -297,7 +318,8 @@ EFFECTS = {
 def test_every_documented_option_changes_the_result(option, request, capsys, tmp_path, monkeypatch):
     """One check for each option of each command: with it the command does something that it does not do without it. No option is accepted and ignored."""
     effect = EFFECTS[option]
-    effect(request.getfixturevalue("launched" if effect is effect_until else "project"), capsys, tmp_path, monkeypatch)
+    extra = [request.getfixturevalue("fixture_site")] if effect in (effect_figures_config, effect_figures_verbose) else []
+    effect(request.getfixturevalue("launched" if effect in (effect_until, effect_from) else "project"), capsys, tmp_path, monkeypatch, *extra)
 
 
 def test_the_options_that_are_tested_are_the_options_of_the_parser():

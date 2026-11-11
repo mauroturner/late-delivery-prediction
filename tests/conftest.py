@@ -484,6 +484,16 @@ def star_export(star_warehouse, tmp_path_factory: pytest.TempPathFactory):
     conn.close()
 
 
+@pytest.fixture(scope="session")
+def fixture_site(star_export, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The five site files of the fixture warehouse, with the test evaluated, written once per session (the tests that draw or read them only read)."""
+    from latedel.site_export import export_site
+
+    folder = tmp_path_factory.mktemp("fixture_site")
+    export_site(star_export.conn, folder, star_export.meta, star_export.cfg)
+    return folder
+
+
 @pytest.fixture()
 def monthly(fitted_launch, delivered, tmp_path):
     """A copy of the warehouse after the launch, with its registered model, ready to receive the monthly deliveries: ``(conn, registered, cfg, folder, plan, entries)``."""
