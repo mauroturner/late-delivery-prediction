@@ -987,13 +987,16 @@ def _last_index(cfg: PipelineConfig, until: str | None, plan: list[DeliverySpec]
 def replay(cfg: PipelineConfig, until: str | None = None, *, on_task: Callable[[str, dict], None] | None = None) -> list[list[dict]]:
     """Run the pending deliveries one run after another, until none is left or the delivery `until` (its id, for example ``M2017-03``) has been run.
 
-    Each run is a complete run of the next pending delivery; the outcomes come back one list per run. With nothing pending, nothing runs and nothing is recorded (a run that
-    finds no delivery is ``run_all``'s, not this loop's). A failure or a rejection stops the replay. One writer lock is held for the whole replay: no other process
-    writes between two of its runs (D82).
+    Each run is a complete run of the next pending delivery; the outcomes come back one list per run. With nothing pending, nothing runs and nothing is recorded, not even
+    the writer lock: a replay with nothing to do is not a writer, so it ends the same while another process holds the folder (a run that finds no delivery is
+    ``run_all``'s, not this loop's; review of H9, decision D87). A failure or a rejection stops the replay. One writer lock is held for the whole replay: no other process
+    writes between two of its runs (D82), and while a run is in progress the lock names it.
     """
     plan = delivery_plan(cfg.deliveries)
     last = _last_index(cfg, until, plan)
     runs: list[list[dict]] = []
+    if next_pending(_manifest_path(cfg), plan) is None:
+        return runs   # read only: the loop below looks again, under the lock, before every run
     with _sole_writer(cfg, command="replay", run_key=None):
         while (pending := next_pending(_manifest_path(cfg), plan)) is not None and plan.index(pending) <= last:
             runs.append(run_all(cfg, on_task=on_task))

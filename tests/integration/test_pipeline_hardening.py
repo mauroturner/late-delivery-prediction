@@ -23,9 +23,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from latedel import lock as lock_module
 from latedel import pipeline
 from latedel.cli import main as cli_main
-from latedel.deliveries import read_manifest
+from latedel.deliveries import delivery_plan, mark_status, publish, read_manifest
+from latedel.ingest import read_interim
 from latedel.lock import LOCK_NAME, read_holder
 from latedel.pipeline import RunLockedError, RunRefusedError, RunStateError, UsageError, replay, run_all, run_task
 from latedel.validate import ValidationError
@@ -368,3 +370,86 @@ def test_each_command_that_takes_the_lock_ends_as_before_and_leaves_the_folder_f
     assert cli_main([*argv, "--config", str(tmp_path / "p" / "config" / "test.toml")]) == 2
     assert needle in capsys.readouterr().err
     assert snapshot(tmp_path / "p") == before and not (tmp_path / "p" / "interim" / LOCK_NAME).exists()
+
+
+# --- B2 of the evaluation of eef9bea and the advisories of the review of H9 that concern the pipeline (decision D87) ---------------------------------------
+
+
+def lock_file_cannot_be_removed(monkeypatch) -> None:
+    """Removing the lock file fails every time, as on Windows while another process has it open (``PermissionError``, WinError 32); no pause between the tries."""
+    real = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.name == LOCK_NAME:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(lock_module, "RELEASE_PAUSE_S", 0, raising=False)
+
+
+def test_a_lock_that_cannot_be_removed_never_replaces_the_outcome_of_the_run(pipeline_rendered, fixture_csv, tmp_path, monkeypatch, capsys):
+    """B2: while any process had ``pipeline.lock`` open, the release raised ``PermissionError``: a run whose every task worked exited 1 with «falló: PermissionError»,
+    and a task that failed had its own error replaced by it. The failing task's error is what the caller sees, and a run that worked exits 0 with a warning."""
+    config = relocate(pipeline_rendered, tmp_path / "p", fixture_csv)
+    lock = config.paths.interim_dir / LOCK_NAME
+    lock_file_cannot_be_removed(monkeypatch)
+    real = pipeline._CLOSERS["html"]
+
+    def boom(ctx):
+        raise RuntimeError("boom in the close")
+
+    monkeypatch.setitem(pipeline._CLOSERS, "html", boom)
+    with pytest.raises(RuntimeError, match="boom in the close"):
+        run_all(config, start="report", run_key="r1")
+    assert lock.exists() and state(config, "r1")["status"] == "failed"
+    os.remove(lock)   # what a person does once nothing writes the folder (runbook R9)
+    monkeypatch.setitem(pipeline._CLOSERS, "html", real)
+    assert cli_main(["run", "--config", str(tmp_path / "p" / "config" / "test.toml"), "--run-key", "r1", "--from", "report"]) == 0
+    err = capsys.readouterr().err
+    assert "falló" not in err and "could not remove the lock" in err and state(config, "r1")["status"] == "ok"
+
+
+def nothing_left_to_deliver(config) -> None:
+    """Publish every delivery of the plan and mark it loaded in the manifest, so that a replay finds nothing pending."""
+    frames, _report = read_interim(config.paths.interim_dir)
+    folder = config.paths.raw_dir / "deliveries"
+    for spec in delivery_plan(config.deliveries):
+        publish(spec, frames, folder, source_sha256=state(config, "r1")["tasks"]["fetch_source"]["sha256"])
+        if (found := [e for e in read_manifest(folder / "manifest.json") if e.delivery_id == spec.delivery_id][0]).status != "loaded":
+            mark_status(folder / "manifest.json", spec.delivery_id, "loaded", found.run_key or "earlier")
+
+
+def test_a_replay_with_nothing_pending_takes_no_lock_and_ends_while_another_process_holds_the_folder(pipeline_closed, fixture_csv, tmp_path, capsys):
+    """R4-replay-noop-requires-write: H9 made ``replay`` take the lock before it looked for a pending delivery, so a replay with nothing to do exited 2 while another
+    process held the folder (before H9 it exited 0), against its own docstring («with nothing pending, nothing runs and nothing is recorded»). A replay with nothing
+    pending writes nothing, the lock included, so it is not a writer and it ends as before (decision D87)."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    nothing_left_to_deliver(config)
+    with another_process_holding(config.paths.interim_dir):
+        before = snapshot(tmp_path / "p")
+        assert replay(config) == []
+        assert cli_main(["replay", "--config", str(tmp_path / "p" / "config" / "test.toml")]) == 0
+        assert "No hay entregas pendientes" in capsys.readouterr().out
+        assert snapshot(tmp_path / "p") == before   # the other process's lock included
+
+
+class Stop(Exception):
+    """Ends a replay right after its first task, for the tests that only look at what the lock says while a run is in progress."""
+
+
+def test_during_a_replay_the_lock_says_the_run_in_progress(pipeline_closed, fixture_csv, tmp_path):
+    """R4-replay-lock-run-key-granularity: the lock said ``replay`` and no run for the whole replay; it says the run in progress, and is gone when the replay ends."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    seen = []
+
+    def probe(task_id, result):
+        seen.append(read_holder(config.paths.interim_dir))
+        raise Stop
+
+    with pytest.raises(Stop):
+        replay(config, until=SECOND, on_task=probe)
+    [holder] = seen
+    [run_key] = [p.stem for p in (config.paths.interim_dir / "runs").glob("*.json") if p.stem != "r1"]
+    assert (holder["command"], holder["run_key"]) == ("run", run_key) and holder["pid"] == os.getpid()
+    assert not (config.paths.interim_dir / LOCK_NAME).exists()
