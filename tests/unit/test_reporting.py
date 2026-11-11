@@ -139,11 +139,13 @@ def test_the_delivery_that_evaluates_the_test_is_the_first_monthly_one_after_its
 
 
 def test_the_sync_is_tried_on_a_temporary_file_and_the_real_readme_is_not_touched(project_root, tmp_path):
-    """U26 owns the real block of the README: nothing in U15 writes it."""
+    """U26 owns the real block of the README (``python -m latedel docs-sync`` fills it from the sealed summary): a sync tried on a copy writes the copy and leaves the
+    real README as it was. Since U26 the real README has its one pair of markers, so the copy is the real text as it is."""
     real = project_root / "README.md"
     before = real.read_bytes()
+    assert before.count(RESULTS_START.encode()) == 1 and before.count(RESULTS_END.encode()) == 1
     _json, md = write_summary(unfavourable(), tmp_path / "reports")
     scratch = tmp_path / "README.md"
-    scratch.write_bytes(before + f"\n{RESULTS_START}\n{RESULTS_END}\n".encode())
-    assert sync_results(scratch, md) is True
+    scratch.write_bytes(before)
+    assert sync_results(scratch, md) is True and scratch.read_bytes() != before
     assert real.read_bytes() == before
