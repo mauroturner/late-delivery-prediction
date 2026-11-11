@@ -236,22 +236,20 @@ def test_writing_again_replaces_the_files_and_a_failure_leaves_the_old_ones(fixt
 # --- every malformed variant fails its rule and says where (AC03, AC05, AC07, AC08) ---------------------------------------
 
 
-def test_each_malformed_variant_fails_its_rule(cfg, fixture_csv, fixture_truth, malformed, tmp_path):
+def test_each_malformed_variant_fails_its_rule(cfg, fixture_csv, fixture_truth, malformed, rejection):
+    """Each damaged variant raises its rule. The reads are the session's (``rejection`` reads each variant once, and checks there that the file is untouched and that
+    nothing was written next to it); the valid file with a limit just above its size and the variant that only has another hash are read here."""
     limited = with_limit(cfg, fixture_truth.size_bytes + 1000)
     assert read_source(fixture_csv, limited)[1].lines == fixture_truth.n_lines
     for kind in MALFORMED_KINDS:
-        path = malformed(kind)
-        before, listing = path.read_bytes(), sorted(p.name for p in tmp_path.iterdir())
         if kind == "wrong_hash":
-            frames, _ = read_source(path, cfg)  # a different hash is rule V01, checked by fetch_source: the content itself is valid
+            frames, _ = read_source(malformed(kind), cfg)  # a different hash is rule V01, checked by fetch_source: the content itself is valid
             assert len(frames.orders) == fixture_truth.n_orders
             continue
-        with pytest.raises(SourceError) as error:
-            read_source(path, limited if kind == "oversize" else cfg)
-        assert error.value.rule_id == MALFORMED_RULES[kind], f"{kind}: {error.value}"
-        assert str(error.value).startswith(MALFORMED_RULES[kind] + ":")
-        assert error.value.problems, f"{kind}: the problems are listed"
-        assert path.read_bytes() == before and sorted(p.name for p in tmp_path.iterdir()) == listing, "the file is untouched and nothing was written"
+        error = rejection(kind, fixture_truth.size_bytes + 1000 if kind == "oversize" else None)
+        assert error.rule_id == MALFORMED_RULES[kind], f"{kind}: {error}"
+        assert str(error).startswith(MALFORMED_RULES[kind] + ":")
+        assert error.problems, f"{kind}: the problems are listed"
 
 
 def test_a_rejected_file_writes_nothing_to_interim(cfg, malformed, tmp_path):

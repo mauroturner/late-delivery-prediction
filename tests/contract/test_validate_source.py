@@ -185,7 +185,7 @@ def test_v13_counts_the_lines_and_the_orders_whose_amounts_do_not_add_up(cfg, tm
 
 @pytest.mark.parametrize("kind", [k for k in MALFORMED_KINDS if k != "wrong_hash"])
 def test_each_malformed_variant_fails_its_rule_and_leaves_the_rest_not_evaluated(fixture_truth, rejection, kind):
-    error = rejection(kind, fixture_truth.size_bytes + 100_000)
+    error = rejection(kind, fixture_truth.size_bytes + 1000 if kind == "oversize" else None)   # the same (kind, limit) as test_source.py asks for: one read per session
     rule = MALFORMED_RULES[kind]
     assert error.rule_id == rule
     report = validate_source(error, run_key="r", source_sha256=SHA)

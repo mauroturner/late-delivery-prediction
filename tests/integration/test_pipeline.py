@@ -676,8 +676,8 @@ def test_a_failed_refresh_after_a_failure_keeps_the_original_error_logs_the_trac
     assert "PermissionError" in state(config, "r2")["exports_stale"] and state(config, "r2")["status"] == "failed"
     assert any("could not refresh the exported files" in r.getMessage() and r.exc_info for r in caplog.records)
     monkeypatch.undo()
-    run_all(config, start="evaluate", run_key="r2")   # a refresh that works clears the mark
-    assert "exports_stale" not in state(config, "r2") and exported_runs(config)["r2"] == "ok"
+    run_task("evaluate", "r2", config)   # resuming the run refreshes the files again: a refresh that works clears the mark
+    assert "exports_stale" not in state(config, "r2") and exported_runs(config)["r2"] == "running"
 
 
 def test_the_very_first_run_failing_before_the_load_creates_no_exported_run_table(pipeline_source, fixture_csv, tmp_path, monkeypatch):

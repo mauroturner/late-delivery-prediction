@@ -98,8 +98,10 @@ def rejection(cfg, malformed_bytes: Callable[[str], bytes], tmp_path_factory: py
             path = folder / f"{kind}.csv"
             path.write_bytes(malformed_bytes(kind))
             config = cfg if size_limit is None else dataclasses.replace(cfg, source=dataclasses.replace(cfg.source, max_bytes=size_limit))
+            before, listing = path.read_bytes(), sorted(p.name for p in folder.iterdir())
             with pytest.raises(SourceError) as error:
                 read_source(path, config)
+            assert path.read_bytes() == before and sorted(p.name for p in folder.iterdir()) == listing, f"{kind}: reading a damaged file must leave it untouched and write nothing"
             cache[(kind, size_limit)] = error.value
         return cache[(kind, size_limit)]
 
