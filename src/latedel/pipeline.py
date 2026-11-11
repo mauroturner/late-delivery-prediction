@@ -111,6 +111,13 @@ class RunContext:
 
 @dataclass(frozen=True)
 class TaskSpec:
+    """One task of the flow: its id, its function and the limits that the Airflow DAG gives its task.
+
+    ``retries``, ``retry_delay_min`` and ``timeout_min`` are enforced by Airflow only (``airflow/dags/latedel_monthly.py`` passes them as ``retries``, ``retry_delay``
+    and ``execution_timeout``, and ``tests/unit/test_dag.py`` checks it): ``run_task``, ``run_all`` and ``replay`` run each task once, without a time limit, and let its
+    error through (D79). ``short_circuit`` marks ``deliver``: with no delivery left the run ends there as ``no_delivery``.
+    """
+
     task_id: str
     func: Callable[[RunContext], dict]
     retries: int
@@ -770,21 +777,6 @@ def _refuse_an_older_date(spec: TaskSpec, ctx: RunContext) -> None:
         )
 
 
-def _refuse_after_a_short_circuit(spec: TaskSpec, ctx: RunContext) -> None:
-    """A run that ended at a short circuit (no delivery) has nothing for the tasks after it: say so instead of failing on the missing keys.
-
-    ``run_all`` stops its loop there; this is the same rule for the caller of ``run_task``, which the Airflow DAG is not (its short circuit skips the rest) but a person or
-    another scheduler can be. The run is not marked failed: it ended as it should.
-    """
-    tasks = _read_state(ctx.state_path).get("tasks", {})
-    for earlier in TASKS[: TASK_IDS.index(spec.task_id)]:
-        if earlier.short_circuit and not tasks.get(earlier.task_id, {}).get("delivered", True):
-            raise RunRefusedError(
-                f"La corrida {ctx.run_key} terminó en la tarea {earlier.task_id} sin entrega (no_delivery): no hay nada que hacer en la tarea "
-                f"{spec.task_id}. Para cargar otra entrega empiece otra corrida (python -m latedel run)"
-            )
-
-
 def _record_failure(ctx: RunContext, spec: TaskSpec, error: BaseException) -> None:
     """Record a failed task: the state file, the row of SQLite and the files already exported.
 
@@ -812,8 +804,13 @@ def _record_failure(ctx: RunContext, spec: TaskSpec, error: BaseException) -> No
 
 
 def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
+    """Run one task after the refusals and save its result; a failure of the task or of the save of its result is recorded (D72, D79).
+
+    The refusals come first and write nothing: a closed run (``ok`` or ``no_delivery``: a run that ended without a delivery is closed, so no task runs after it), a
+    second delivery, a model task of an older date. ``except BaseException`` is on purpose: an interruption (Ctrl+C, a scheduler that stops the process with an
+    exception) leaves the run unfinished, so it is recorded as ``failed`` like any failure, which keeps it open for a resume, and the interruption is raised again.
+    """
     _refuse_a_closed_run(spec, ctx)
-    _refuse_after_a_short_circuit(spec, ctx)
     _refuse_a_second_delivery(spec, ctx)
     _refuse_an_older_date(spec, ctx)
     started = time.perf_counter()
@@ -823,7 +820,7 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
         result = spec.func(ctx)
     except ValidationError:
         raise  # the run was rejected: the task already said so, and nothing was written to SQLite
-    except BaseException as error:
+    except BaseException as error:  # an interruption too: see the docstring
         _record_failure(ctx, spec, error)
         logger.exception("task %s failed after %.1f s: %s", spec.task_id, time.perf_counter() - started, error, exc_info=error)
         raise
@@ -834,7 +831,23 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
         **result, "seconds": round(time.perf_counter() - started, 2), "peak_working_set_mb": None if peaks is None else round(peaks.working_set_mb, 1),
         "peak_commit_mb": None if peaks is None or peaks.commit_mb is None else round(peaks.commit_mb, 1), "memory_counter": None if peaks is None else peaks.counter,
     }
-    _save_task(ctx, spec.task_id, result, status=result.get("run_status"))
+    try:
+        _save_task(ctx, spec.task_id, result, status=result.get("run_status"))
+    except BaseException as error:
+        if result.get("run_status") in CLOSED_STATUSES:
+            # The task closed the run before its result was saved (report after its five closing writes, deliver with nothing left to deliver): SQLite and the exported
+            # files already say how it ended and the manifest cannot be taken back, so marking it failed would contradict them (D72). The run stays open in its state
+            # file and the same task, run again, records the end.
+            logger.error(
+                "task %s closed run %s as %s but its result could not be saved in %s: run it again (python -m latedel run --run-key %s --from %s)",
+                spec.task_id, ctx.run_key, result["run_status"], ctx.state_path, ctx.run_key, spec.task_id, exc_info=error,
+            )
+            raise
+        # The work of the task is done (a delivery published, a load committed) but the run has no record of it: a failure like any other, so the run is open for a
+        # resume from this task and the refusals see a failed run, not a running one that nobody records (review of U21, D79).
+        _record_failure(ctx, spec, error)
+        logger.exception("task %s failed after %.1f s while saving its result: %s", spec.task_id, time.perf_counter() - started, error, exc_info=error)
+        raise
     logger.info("task %s end in %.1f s", spec.task_id, result["seconds"])
     return result
 
