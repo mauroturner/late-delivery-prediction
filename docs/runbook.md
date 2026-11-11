@@ -107,6 +107,8 @@ Tres principios valen para todo el documento:
 3. **El modo del archivo del sello** (D71, D78): en POSIX el sello se crea solo para su dueño (0o600); en Windows, crearlo registra un aviso que dice que el modo 0o600 no es allí un control de acceso y nombra la carpeta (`reports/`) cuya lista de acceso decide quién lo lee. Es lo esperado, no un error: lo que se revisa es esa lista de acceso.
 4. En un sistema de archivos sin enlaces duros el sello se crea de forma exclusiva, y una escritura interrumpida no deja un medio sello (D64).
 
+**Después de la evaluación independiente (D89).** `SealMismatchError` nombra ahora los valores que no se reproducen («… redondeados a 6 decimales: model.auc, C01.passed …»): esos valores solo dependen de la configuración que cubre la huella, de los datos y del modelo, así que es una reproducción fallida de verdad. Si la diferencia está solo en valores que cambian claves que la huella no cubre (`[costs] threshold_*` y `sensitivity_*`, `[evaluation] bootstrap_*` y `calibration_bins`, `[features] noon_hour`), la corrida no falla: se guarda como posterior al sello y el registro lo avisa con las claves («another configuration, not a failed reproduction»). Si ninguna de esas claves cambió, ese aviso es en realidad una reproducción fallida (un cambio de código en esos cálculos): compare la configuración con la sellada antes de seguir.
+
 ## R8 Airflow no arranca
 
 **Síntoma.** `docker compose up` falla, el servicio `airflow-init` sale con un código distinto de 0 o la interfaz no aparece en `http://localhost:8080`.
@@ -140,6 +142,8 @@ docker compose up -d
 2. Si dice que ya no está, o que es de un contenedor que ya terminó (`docker compose ps` y los registros de la tarea), comprobar que nada más escribe la carpeta (tampoco un contenedor que la monte), borrar `data\interim\pipeline.lock` y retomar la corrida que quedó a medias: `python -m latedel run --run-key <corrida> --from <tarea>`.
 3. Para `database is locked`, cerrar el programa que tiene abierto `data\warehouse\latedel.sqlite` y retomar la corrida desde la tarea que falló.
 4. Con Airflow, el planificador corre una corrida y una tarea a la vez; `airflow dags test` del servicio de depuración se corre con el planificador detenido (R8).
+
+**Después de la evaluación independiente (D87).** El bloqueo dice también cuándo empezó su proceso (`started`): si el número de proceso está vivo pero lo tiene otro proceso que empezó después, el mensaje lo dice como un bloqueo que quedó de un proceso que ya no está en marcha. Durante un `replay` el bloqueo nombra la corrida en curso (`run` y su clave). Otro hilo del mismo proceso se rechaza como otro proceso («Otro hilo de este mismo proceso escribe esta carpeta de datos»). Un `replay` sin entregas pendientes no toma el bloqueo y termina con 0. Si al terminar no se pudo borrar el bloqueo porque otro proceso tenía el archivo abierto, la corrida termina con su resultado y el registro avisa «could not remove the lock … remove it by hand once nothing writes the folder»: es el mismo caso que el de un proceso matado, y se resuelve igual (pasos 1 y 2).
 
 ## R10 Reconstruir desde cero, con el sello
 
@@ -192,6 +196,8 @@ Remove-Item -Recurse -Force data\quick
 1. En el contenedor, `LATEDEL_CONFIG=/opt/latedel/config/pipeline.quick.toml` hace que el DAG use el modo rápido; la prueba de Docker lo usa así.
 2. `data/quick/` no se versiona; la prueba del modo rápido se niega a correr si quedó de otra corrida.
 
+**Después de la evaluación independiente (D90).** Un `LATEDEL_CONFIG` relativo se toma de `LATEDEL_HOME` o, sin ella, de la carpeta del proyecto, nunca del directorio de trabajo. `python -m latedel docs-sync --config config\pipeline.quick.toml` sale con 2 sin escribir nada y lo explica: el modo rápido no tiene README, y su resumen queda en `data/quick/reports/evaluation_summary.md`.
+
 ## R13 Cambiar los costos supuestos o hacer una versión 2 del modelo
 
 **Síntoma.** Se quiere otro umbral, otros costos, otras variables u otro modelo.
@@ -203,3 +209,5 @@ Remove-Item -Recurse -Force data\quick
 1. Para ver el efecto de otros costos sin tocar nada, leer la sensibilidad: `fact_cost_sensitivity` y la figura `docs/figures/cost_curve.png` dan el beneficio neto del modelo, B2 y B5 en cada punto de equilibrio de 0,10 a 0,90, con el umbral elegido en V2.
 2. Para usar otros costos: registrar una decisión nueva, cambiar `[costs]` en una configuración propia y correr en una copia aparte; el resultado es posterior al sello y se informa así en el resumen, el README y el sitio.
 3. Una versión 2 del modelo (otras variables, otro clasificador, reentrenar con 2017) es otro lanzamiento: una `model_version` nueva, un sello propio y una prueba nueva que no haya mirado nadie. Los datos de este archivo ya no tienen una prueba sin mirar: un lanzamiento nuevo necesita datos nuevos.
+
+**Después de la evaluación independiente (D88).** En una repetición desde cero con otra configuración, el resumen (`reports/evaluation_summary.md` y `.json`, y el bloque del README que copia `docs-sync`) muestra primero los criterios C01 a C09 y las cifras de la prueba tal como constan en el sello, con los costos sellados, y debajo, como posterior al sello, lo que calculó esa configuración con sus costos. El sello solo se lee.

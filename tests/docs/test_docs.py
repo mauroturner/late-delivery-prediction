@@ -83,7 +83,7 @@ def test_the_model_card_has_the_contents_of_the_plan_and_says_the_unfavourable_v
 
 
 def test_the_readme_says_what_is_not_done_and_gives_the_attribution(readme: str) -> None:
-    """RNF14 and RNF09: the independent evaluation, the ``.pbix`` and the scheduled Airflow run on the real file are not done, and the README says so; the citation of
+    """RNF14 and RNF09: the check of the corrections of the independent evaluation, the ``.pbix`` and the scheduled Airflow run on the real file are not done, and the README says so; the citation of
     the source is complete; no private address is published."""
     text = readme.lower()
     assert "evaluación independiente" in text and "todavía no" in text and ".pbix" in text
@@ -295,4 +295,30 @@ def test_the_root_rows_of_project_03_carry_the_real_figures(project_root: Path) 
     assert rows.count("no supera") >= 2 and "C03" in rows and "C05" in rows and "@gmail" not in rows
     expansion = (project_root.parent / "LANDING-EXPANSION.md").read_text(encoding="utf-8")
     marked = {line.split("|")[1].strip() for line in expansion.splitlines() if line.startswith("| ") and "03 Pedidos que llegan tarde" in line}
-    assert marked == {"NumPy", "SQLite", "Apache Parquet con pyarrow", "matplotlib", "pytest", "PostgreSQL"}   # D27: the ones this project uses, and no new row
+    assert marked == {"NumPy", "SciPy", "SQLite", "Apache Parquet con pyarrow", "matplotlib", "pytest", "PostgreSQL"}   # D27: the ones this project uses (SciPy too, B6), and no new row
+
+
+def advisories(text: str) -> dict[tuple[str, str], str]:
+    """Every advisory of the review file by (section, id), with its resolution: the bold words after «Resolución:» («corregido», «rechazado», «abierta»…), or an empty
+    string when it has none. The section «Para el runbook» lists what the runbook says, not advisories."""
+    found: dict[tuple[str, str], str] = {}
+    for section in re.split(r"^## ", text, flags=re.MULTILINE)[1:]:
+        title = section.splitlines()[0]
+        if title.startswith("Para el runbook"):
+            continue
+        for block in re.split(r"^(?=- \*\*)", section, flags=re.MULTILINE)[1:]:
+            ident = re.match(r"- \*\*([^*]+)\*\*", block).group(1)
+            resolution = re.search(r"^  - Resolución: \*\*([^*]+)\*\*", block, flags=re.MULTILINE)
+            found[(title, ident)] = resolution.group(1) if resolution else ""
+    return found
+
+
+def test_open_advisories_match_review_file(project_root: Path, readme: str) -> None:
+    """AC35 and B5 of the evaluation of eef9bea (plan, section 21): every advisory of every review, and every finding of the independent evaluation, has its resolution in
+    ``docs/review-advisories.md``; the advisories the README says are open are the ones that file calls open («abierta»), no more and no fewer."""
+    found = advisories(read(project_root, "review-advisories.md"))
+    assert len(found) >= 90 and [key for key, resolution in found.items() if not resolution] == []
+    assert any(title.startswith("H9 ") for title, _ in found) and any(title.startswith("Evaluación independiente") for title, _ in found)
+    opened = sorted(ident for (_title, ident), resolution in found.items() if resolution.startswith("abierta"))
+    [stated] = re.findall(r"^Advertencias abiertas: (.+)$", readme, flags=re.MULTILINE)
+    assert (sorted(re.findall(r"`([^`]+)`", stated.split(" (")[0])) or ["ninguna"]) == (opened or ["ninguna"]), stated
