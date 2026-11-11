@@ -6,6 +6,11 @@ them honest. The measures and the pages arrive with U18. Names of tables, column
 
 Dimensions have a unique key; facts have a grain (``Table.key``). ``dim_as_of``, ``dim_model`` and the facts of the evaluation have no relationship: they feed their
 own visuals and measures (docs/plan.md section 16).
+
+U18 adds the DAX measures and the five pages with their visuals on a grid of 12 columns by 9 rows (docs/plan.md section 17), in the form of project 02's model:
+``Measure``, ``Visual`` and ``Page``. A measure names its columns as ``table[column]`` and the other measures as ``[Measure]``; ``validate_model`` checks that every one
+exists, that every field of every visual resolves and that the visuals of a page stay on the grid without overlapping. No measure is executed in this project (there is no
+DAX engine here); the HTML design says so.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ import pyarrow as pa
 ARROW_TYPES = {
     "int32": pa.int32(), "int64": pa.int64(), "float64": pa.float64(), "string": pa.string(), "bool": pa.bool_(), "date": pa.date32(),
 }
+PAGE_COLUMNS, PAGE_ROWS = 12, 9          # 12 columns x 9 rows of equal cells fill a 16:9 canvas of 1280 x 720 px (106.7 x 80 px)
+PAGE_WIDTH_PX, PAGE_HEIGHT_PX = 1280, 720
 YYYYMMDD, YYYYMM = "AAAAMMDD", "AAAAMM"
 U = "u."          # the generic units of cost (D14)
 
@@ -60,12 +67,42 @@ class Relationship:
 
 
 @dataclass(frozen=True)
+class Measure:
+    name_es: str
+    dax: str
+    format_string: str
+    description_es: str
+
+
+@dataclass(frozen=True)
+class Visual:
+    kind: str
+    title_es: str
+    fields: tuple[str, ...]  # "table[column]" or "[Measure]"
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+@dataclass(frozen=True)
+class Page:
+    name_es: str
+    visuals: tuple[Visual, ...]
+
+
+@dataclass(frozen=True)
 class SemanticModel:
     tables: tuple[Table, ...]
     relationships: tuple[Relationship, ...]
+    measures: tuple[Measure, ...] = ()
+    pages: tuple[Page, ...] = ()
 
     def table(self, name: str) -> Table:
         return next(t for t in self.tables if t.name == name)
+
+    def measure(self, name: str) -> Measure:
+        return next(m for m in self.measures if m.name_es == name)
 
 
 def _c(name: str, dtype: str, description_es: str, unit: str | None = None) -> Column:
@@ -320,7 +357,169 @@ _PAIRS = (
 )
 RELATIONSHIPS = tuple(Relationship(f"R{i:02d}", *pair) for i, pair in enumerate(_PAIRS, start=1))
 
-MODEL = SemanticModel(TABLES, RELATIONSHIPS)
+# --- measures (docs/plan.md section 17) -------------------------------------------------------------------------------------------------------
+
+INTEGER, PERCENT, DECIMAL_1, DECIMAL_2, DATE_FORMAT, TEXT_FORMAT = "#,0", "0.0%", "0.0", "0.00", "yyyy-mm-dd", "@"
+
+MEASURES: tuple[Measure, ...] = (
+    Measure(
+        "Fecha de cálculo elegida",
+        "IF ( ISFILTERED ( dim_as_of[as_of_key] ),\n"
+        "    SELECTEDVALUE ( dim_as_of[as_of_date] ),\n"
+        '    CALCULATE ( MAX ( dim_pipeline_run[as_of_date] ), dim_pipeline_run[status] = "ok" ) )',
+        DATE_FORMAT, "La fecha de cálculo del segmentador o, si no se eligió ninguna, la de la última corrida terminada bien. Las alertas abiertas la usan.",
+    ),
+    Measure("Pedidos", "COUNTROWS ( fact_order )", INTEGER, "Pedidos de las entregas cargadas, con o sin puntaje."),
+    Measure(
+        "Pedidos puntuados", "CALCULATE ( COUNTROWS ( fact_order ), NOT ISBLANK ( fact_order[risk] ) )", INTEGER,
+        "Pedidos con un riesgo calculado al crearse; los del lanzamiento no se puntúan.",
+    ),
+    Measure("Alertas", "CALCULATE ( COUNTROWS ( fact_order ), fact_order[is_alert] = TRUE () )", INTEGER, "Pedidos cuyo riesgo alcanzó el umbral cuando se crearon."),
+    Measure("Alertado (%)", "DIVIDE ( [Alertas], [Pedidos puntuados] )", PERCENT, "Parte de los pedidos puntuados que quedó con alerta."),
+    Measure("Riesgo medio", "AVERAGE ( fact_order[risk] )", PERCENT, "Probabilidad media de llegar tarde de los pedidos puntuados."),
+    Measure("Retrasos esperados", "SUM ( fact_order[risk] )", DECIMAL_1, "Pedidos que el modelo esperaba que llegaran tarde: la suma de los riesgos."),
+    Measure(
+        "Alertas abiertas a la fecha",
+        "VAR d = [Fecha de cálculo elegida]\n"
+        "RETURN CALCULATE ( [Alertas], fact_order[scored_as_of_date] <= d,\n"
+        "    FILTER ( fact_order, ISBLANK ( fact_order[outcome_known_date] ) || fact_order[outcome_known_date] > d ) )",
+        INTEGER, "Alertas emitidas hasta la fecha elegida cuyo resultado todavía no se conocía ese día.",
+    ),
+    Measure("Pedidos cerrados", 'CALCULATE ( COUNTROWS ( fact_order ), fact_order[outcome_status] = "closed" )', INTEGER, "Pedidos con resultado conocido que no se cancelaron."),
+    Measure("Pedidos tarde", "CALCULATE ( COUNTROWS ( fact_order ), fact_order[is_late] = TRUE () )", INTEGER, "Pedidos cerrados cuyos días reales superan a los programados."),
+    Measure("Tasa de retraso observada", "DIVIDE ( [Pedidos tarde], [Pedidos cerrados] )", PERCENT, "Parte de los pedidos cerrados que llegó tarde."),
+    Measure("Alertas cerradas", 'CALCULATE ( [Alertas], fact_order[outcome_status] = "closed" )', INTEGER, "Alertas sobre pedidos que ya tienen resultado."),
+    Measure("Alertas que llegaron tarde", "CALCULATE ( [Alertas], fact_order[is_late] = TRUE () )", INTEGER, "Alertas sobre pedidos que llegaron tarde: las que acertaron."),
+    Measure("Tarde sin alerta", "CALCULATE ( [Pedidos tarde], fact_order[is_alert] = FALSE () )", INTEGER, "Pedidos puntuados que llegaron tarde sin que se los marcara."),
+    Measure("Precisión de las alertas", "DIVIDE ( [Alertas que llegaron tarde], [Alertas cerradas] )", PERCENT, "De las alertas cerradas, parte que llegó tarde."),
+    Measure(
+        "Recall de las alertas", "DIVIDE ( [Alertas que llegaron tarde], [Alertas que llegaron tarde] + [Tarde sin alerta] )", PERCENT,
+        "De los pedidos puntuados que llegaron tarde, parte que tenía alerta.",
+    ),
+    Measure("Umbral", "SELECTEDVALUE ( dim_model[threshold] )", DECIMAL_2, "Probabilidad desde la cual un pedido queda con alerta; se eligió en V2 por beneficio neto."),
+    Measure(
+        "Costos supuestos",
+        '"Costos supuestos, no medidos: alerta " & FORMAT ( SELECTEDVALUE ( dim_model[alert_cost] ), "0.0" ) & " u., retraso " & '
+        'FORMAT ( SELECTEDVALUE ( dim_model[late_cost] ), "0.0" ) & " u., efecto " & FORMAT ( SELECTEDVALUE ( dim_model[effect] ), "0.00" )',
+        TEXT_FORMAT, "Los costos con que se eligió el umbral, dichos como supuestos: los datos no traen costos.",
+    ),
+    Measure(
+        "Beneficio neto estimado (u.)",
+        "[Alertas que llegaron tarde] * SELECTEDVALUE ( dim_model[late_cost] ) * SELECTEDVALUE ( dim_model[effect] )\n"
+        "    - [Alertas cerradas] * SELECTEDVALUE ( dim_model[alert_cost] )",
+        DECIMAL_1, "Beneficio de las alertas cerradas con los costos supuestos, en unidades de costo genéricas.",
+    ),
+    Measure(
+        "Precisión mensual", "DIVIDE ( SUM ( fact_tracking_monthly[alerts_late] ), SUM ( fact_tracking_monthly[closed_alerts] ) )", PERCENT,
+        "Precisión de las alertas cerradas, por mes del pedido.",
+    ),
+    Measure(
+        "Recall mensual",
+        "DIVIDE ( SUM ( fact_tracking_monthly[alerts_late] ),\n    SUM ( fact_tracking_monthly[alerts_late] ) + SUM ( fact_tracking_monthly[late_missed] ) )",
+        PERCENT, "Recall de las alertas cerradas, por mes del pedido.",
+    ),
+    Measure("Retrasos esperados en el mes", "SUM ( fact_tracking_monthly[late_expected] )", DECIMAL_1, "Suma del riesgo de los pedidos cerrados del mes."),
+    Measure("Retrasos observados en el mes", "SUM ( fact_tracking_monthly[late_closed] )", INTEGER, "Pedidos cerrados del mes que llegaron tarde."),
+    Measure(
+        "Alertado mensual (%)", "DIVIDE ( SUM ( fact_tracking_monthly[alerts] ), SUM ( fact_tracking_monthly[orders_scored] ) )", PERCENT,
+        "Parte de los pedidos puntuados del mes que quedó con alerta.",
+    ),
+    Measure("Días reales medios", "AVERAGE ( fact_order[real_days] )", DECIMAL_1, "Días reales de envío de los pedidos cerrados."),
+    Measure("Días programados", "AVERAGE ( dim_shipping_mode[scheduled_days] )", DECIMAL_1, "Días programados que fija la fuente para el modo de envío."),
+    Measure("Veredicto", "SELECTEDVALUE ( fact_evaluation_summary[verdict_es] )", TEXT_FORMAT, "El veredicto del criterio elegido, con su número; dice «supera» o «no supera»."),
+    Measure("Última fecha de cálculo", 'CALCULATE ( MAX ( dim_pipeline_run[as_of_date] ), dim_pipeline_run[status] = "ok" )', DATE_FORMAT, "La fecha de cálculo de la última corrida terminada bien."),
+    Measure(
+        "Estado de la última corrida",
+        "VAR k = CALCULATE ( MAX ( dim_pipeline_run[as_of_key] ), REMOVEFILTERS ( dim_pipeline_run ) )\n"
+        "RETURN CALCULATE ( SELECTEDVALUE ( dim_pipeline_run[status] ), REMOVEFILTERS ( dim_pipeline_run ), dim_pipeline_run[as_of_key] = k )",
+        TEXT_FORMAT, "El estado (running, ok, failed…) de la corrida con la fecha de cálculo más reciente.",
+    ),
+    Measure(
+        "Reglas bloqueantes fallidas",
+        'CALCULATE ( COUNTROWS ( fact_validation ), fact_validation[severity] = "bloqueante", fact_validation[status] = "falla" )', INTEGER,
+        "Reglas bloqueantes que fallaron en las corridas elegidas.",
+    ),
+    Measure("Pedidos cancelados", 'CALCULATE ( COUNTROWS ( fact_order ), fact_order[outcome_status] = "cancelled" )', INTEGER, "Pedidos que se cancelaron después de crearse; están fuera de la tarea."),
+)
+
+# --- pages: visuals on a 12 x 9 grid (x, y, width, height in cells; docs/plan.md section 17) ------------------------------------------------------------
+
+_OPEN_ALERTS = (
+    "fact_order[order_id]", "dim_date[date]", "dim_shipping_mode[mode_es]", "dim_geo[market]", "dim_geo[order_region]", "dim_geo[order_country]", "dim_product[product_name]",
+    "fact_order[risk]",
+)
+
+PAGES: tuple[Page, ...] = (
+    Page("Alertas", (
+        Visual("slicer", "Fecha de cálculo", ("dim_as_of[as_of_label]",), 0, 0, 4, 1),
+        Visual("slicer", "Modo de envío", ("dim_shipping_mode[mode_es]",), 4, 0, 4, 1),
+        Visual("slicer", "Mercado", ("dim_geo[market]",), 8, 0, 4, 1),
+        Visual("card", "Pedidos puntuados", ("[Pedidos puntuados]",), 0, 1, 2, 1),
+        Visual("card", "Alertas", ("[Alertas]",), 2, 1, 2, 1),
+        Visual("card", "Alertado (%)", ("[Alertado (%)]",), 4, 1, 2, 1),
+        Visual("card", "Retrasos esperados", ("[Retrasos esperados]",), 6, 1, 2, 1),
+        Visual("card", "Umbral", ("[Umbral]",), 8, 1, 2, 1),
+        Visual("card", "Alertas abiertas a la fecha", ("[Alertas abiertas a la fecha]",), 10, 1, 2, 1),
+        Visual("card", "Costos supuestos", ("[Costos supuestos]",), 0, 2, 12, 1),
+        Visual("table", "Alertas abiertas a la fecha, ordenadas por riesgo", _OPEN_ALERTS, 0, 3, 7, 6),
+        Visual("barChart", "Alertas por modo de envío", ("dim_shipping_mode[mode_es]", "[Alertas]"), 7, 3, 5, 3),
+        Visual("matrix", "Alertado (%) por mercado y modo", ("dim_geo[market]", "dim_shipping_mode[mode_es]", "[Alertado (%)]"), 7, 6, 5, 3),
+    )),
+    Page("Dónde se traban", (
+        Visual("matrix", "Tasa de retraso observada por modo de envío y mercado", ("dim_shipping_mode[mode_es]", "dim_geo[market]", "[Tasa de retraso observada]"), 0, 0, 6, 3),
+        Visual("matrix", "Tasa de retraso observada por modo de envío y hora del pedido", ("dim_shipping_mode[mode_es]", "fact_order[order_hour]", "[Tasa de retraso observada]"), 6, 0, 6, 3),
+        Visual("barChart", "Tasa de retraso observada por región", ("dim_geo[order_region]", "[Tasa de retraso observada]"), 0, 3, 6, 3),
+        Visual("barChart", "Tasa de retraso observada por departamento", ("dim_product[department_name]", "[Tasa de retraso observada]"), 6, 3, 6, 3),
+        Visual("clusteredColumnChart", "Días reales y programados por modo de envío", ("dim_shipping_mode[mode_es]", "[Días reales medios]", "[Días programados]"), 0, 6, 12, 3),
+    )),
+    Page("Seguimiento", (
+        Visual("lineChart", "Precisión y recall mensuales de las alertas cerradas", ("dim_month[year_month_label]", "[Precisión mensual]", "[Recall mensual]"), 0, 0, 6, 4),
+        Visual("clusteredColumnChart", "Retrasos esperados y observados por mes", (
+            "dim_month[year_month_label]", "[Retrasos esperados en el mes]", "[Retrasos observados en el mes]",
+        ), 6, 0, 6, 4),
+        Visual("card", "Precisión de las alertas", ("[Precisión de las alertas]",), 0, 4, 3, 1),
+        Visual("card", "Recall de las alertas", ("[Recall de las alertas]",), 3, 4, 3, 1),
+        Visual("card", "Beneficio neto estimado (con costos supuestos)", ("[Beneficio neto estimado (u.)]",), 6, 4, 3, 1),
+        Visual("card", "Riesgo medio", ("[Riesgo medio]",), 9, 4, 3, 1),
+        Visual("lineChart", "Alertado (%) por mes", ("dim_month[year_month_label]", "[Alertado mensual (%)]"), 0, 5, 12, 2),
+        Visual("textbox", "Desde 2017-10 los datos cambian de forma (un pedido por cliente y una línea por pedido): los meses posteriores se leen aparte.", (), 0, 7, 12, 2),
+    )),
+    Page("Validación del modelo", (
+        Visual("table", "Criterios C01 a C10", (
+            "fact_evaluation_summary[criterion_id]", "fact_evaluation_summary[name_es]", "fact_evaluation_summary[threshold_es]", "fact_evaluation_summary[seen_by_research]",
+            "fact_evaluation_summary[seen_by_planner]", "fact_evaluation_summary[verdict_es]",
+        ), 0, 0, 8, 3),
+        Visual("card", "Veredicto", ("[Veredicto]",), 8, 0, 4, 3),
+        Visual("lineChart", "Curva ROC del modelo, B2 y B5 en la prueba", ("fact_roc[fpr]", "fact_roc[tpr]", "fact_roc[method]"), 0, 3, 4, 3),
+        Visual("lineChart", "Calibración", ("fact_calibration[p_mean]", "fact_calibration[observed]", "fact_calibration[method]"), 4, 3, 4, 3),
+        Visual("lineChart", "Curva de costo: beneficio por 1.000 pedidos según el punto de equilibrio", (
+            "fact_cost_sensitivity[break_even]", "fact_cost_sensitivity[nb_per_1000]", "fact_cost_sensitivity[method]",
+        ), 8, 3, 4, 3),
+        Visual("barChart", "AUC en validación con cada columna que delata el resultado: por qué quedan fuera", (
+            "fact_leakage[column_es]", "fact_leakage[auc_with_mode_valid]",
+        ), 0, 6, 6, 3),
+        Visual("barChart", "Importancia por permutación", ("fact_importance[feature_es]", "fact_importance[auc_drop]"), 6, 6, 6, 3),
+    )),
+    Page("Calidad y corridas", (
+        Visual("card", "Última fecha de cálculo", ("[Última fecha de cálculo]",), 0, 0, 3, 1),
+        Visual("card", "Estado de la última corrida", ("[Estado de la última corrida]",), 3, 0, 3, 1),
+        Visual("card", "Reglas bloqueantes fallidas", ("[Reglas bloqueantes fallidas]",), 6, 0, 2, 1),
+        Visual("card", "Pedidos", ("[Pedidos]",), 8, 0, 2, 1),
+        Visual("card", "Pedidos cancelados", ("[Pedidos cancelados]",), 10, 0, 2, 1),
+        Visual("table", "Reglas de validación", (
+            "fact_validation[rule_id]", "fact_validation[name_es]", "fact_validation[severity]", "fact_validation[rows_affected]", "fact_validation[orders_affected]",
+            "fact_validation[status]",
+        ), 0, 1, 7, 4),
+        Visual("slicer", "Corrida", ("dim_pipeline_run[run_key]",), 7, 1, 5, 1),
+        Visual("textbox", "Una regla bloqueante que falla rechaza la entrega: nada se carga. Las advertencias se cuentan y siguen; las informativas solo se cuentan.", (), 7, 2, 5, 3),
+        Visual("table", "Corridas", (
+            "dim_pipeline_run[run_key]", "dim_pipeline_run[started_at]", "dim_pipeline_run[status]", "dim_pipeline_run[delivery_id]", "dim_pipeline_run[as_of_date]",
+            "dim_pipeline_run[orders_delivery]", "dim_pipeline_run[orders_scored]", "dim_pipeline_run[alerts]", "dim_pipeline_run[peak_working_set_mb]",
+        ), 0, 5, 12, 4),
+    )),
+)
+
+MODEL = SemanticModel(TABLES, RELATIONSHIPS, MEASURES, PAGES)
 
 
 def arrow_schema(table: Table) -> pa.Schema:
@@ -328,12 +527,18 @@ def arrow_schema(table: Table) -> pa.Schema:
     return pa.schema([pa.field(c.name, ARROW_TYPES[c.dtype], nullable=c.name not in table.key) for c in table.columns])
 
 
-_REF = re.compile(r"(\w+)\[(\w+)\]")
+_REF = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\[([A-Za-z_][A-Za-z0-9_]*)\]")
+_MEASURE_REF = re.compile(r"(?<![A-Za-z0-9_\]])\[([^\[\]]+)\]")
 
 
 def dax_column_refs(dax: str) -> set[tuple[str, str]]:
     """The ``table[column]`` references of a DAX expression."""
     return set(_REF.findall(dax))
+
+
+def dax_measure_refs(dax: str) -> set[str]:
+    """The names of the measures a DAX expression names as ``[Measure]`` (a bracket not attached to a table)."""
+    return set(_MEASURE_REF.findall(dax))
 
 
 def validate_model(model: SemanticModel) -> list[str]:
@@ -376,4 +581,57 @@ def validate_model(model: SemanticModel) -> list[str]:
             problems.append(f"{label}: the two columns have different types")
         if (r.cardinality, r.cross_filter, r.active) != ("one_to_many", "single", True):
             problems.append(f"{label}: must be one to many, with a single filter direction, and active")
+    problems.extend(_measure_problems(model, by_name))
+    problems.extend(_page_problems(model, by_name))
+    return problems
+
+
+def _field_problem(model: SemanticModel, field: str) -> str | None:
+    """Why a field of a visual does not resolve (``table[column]`` or ``[Measure]``), or None."""
+    if field.startswith("["):
+        name = field[1:-1] if field.endswith("]") else field
+        return None if any(m.name_es == name for m in model.measures) else f"unknown measure {field}"
+    match = _REF.fullmatch(field)
+    if match is None:
+        return f"malformed field {field!r}"
+    table, column = match.groups()
+    return None if any(t.name == table and column in t.column_names for t in model.tables) else f"unknown column {field}"
+
+
+def _measure_problems(model: SemanticModel, tables: dict[str, Table]) -> list[str]:
+    problems: list[str] = []
+    names = [m.name_es for m in model.measures]
+    for name in sorted({n for n in names if names.count(n) > 1}):
+        problems.append(f"the measure [{name}] appears more than once")
+    for m in model.measures:
+        if m.dax.count("(") != m.dax.count(")") or m.dax.count('"') % 2:
+            problems.append(f"[{m.name_es}]: unbalanced parentheses or quotes in the DAX")
+        for table, column in sorted(dax_column_refs(m.dax)):
+            if table not in tables or column not in tables[table].column_names:
+                problems.append(f"[{m.name_es}]: {table}[{column}] does not exist")
+        for ref in sorted(dax_measure_refs(m.dax) - {m.name_es}):
+            if ref not in names:
+                problems.append(f"[{m.name_es}]: the measure [{ref}] does not exist")
+        if not m.description_es or not m.format_string:
+            problems.append(f"[{m.name_es}]: needs a format and a description")
+    return problems
+
+
+def _page_problems(model: SemanticModel, tables: dict[str, Table]) -> list[str]:
+    problems: list[str] = []
+    for page in model.pages:
+        taken: dict[tuple[int, int], str] = {}
+        for v in page.visuals:
+            label = f"{page.name_es}: {v.title_es}"
+            for field in v.fields:
+                if (why := _field_problem(model, field)) is not None:
+                    problems.append(f"{label}: {why}")
+            if v.w < 1 or v.h < 1 or v.x < 0 or v.y < 0 or v.x + v.w > PAGE_COLUMNS or v.y + v.h > PAGE_ROWS:
+                problems.append(f"{label}: outside the {PAGE_COLUMNS} x {PAGE_ROWS} grid")
+                continue
+            cells = [(cx, cy) for cx in range(v.x, v.x + v.w) for cy in range(v.y, v.y + v.h)]
+            clash = next((taken[c] for c in cells if c in taken), None)
+            if clash is not None:
+                problems.append(f"{label}: overlaps {clash}")
+            taken.update({c: v.title_es for c in cells})
     return problems
