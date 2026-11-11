@@ -9,7 +9,7 @@ tracked AS (
 scored AS (
     SELECT COUNT(*) AS orders_scored, COALESCE(SUM(is_alert), 0) AS alerts
     FROM model_scores
-    WHERE as_of_date <= COALESCE((SELECT day FROM latest), '0000-00-00')
+    WHERE (SELECT day FROM latest) IS NOT NULL AND as_of_date <= (SELECT day FROM latest)      -- with no follow-up there is no date to count up to: no score is counted here, and no_follow_up below says so
 )
 SELECT 'orders_scored' AS problem, tracked.orders_scored AS tracked, scored.orders_scored AS scored FROM tracked, scored WHERE tracked.orders_scored <> scored.orders_scored
 UNION ALL

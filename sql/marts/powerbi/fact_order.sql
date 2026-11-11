@@ -1,4 +1,4 @@
--- One row per order: its variables of the moment, the block, the score the frozen model gave it when it was new and the outcome once it is known. The score and the
+-- One row per order: its variables of the moment, the block (from ref_block, the one table of the edges of the split, loaded by the export), the score the frozen model gave it when it was new and the outcome once it is known. The score and the
 -- outcome are NULL where they do not exist. Reads dim_geo, which is built first. Parameters: the edges of the split.
 DROP TABLE IF EXISTS star_fact_order;
 
@@ -25,22 +25,13 @@ SELECT
     o.payment_type AS payment_key,
     o.order_ts AS order_ts,
     CAST(substr(o.order_ts, 12, 2) AS INTEGER) AS order_hour,
-    (CAST(strftime('%w', o.order_date) AS INTEGER) + 6) % 7 AS order_weekday,
+    (CAST(strftime('%w', o.order_date) AS INTEGER) + 6) % 7 AS order_weekday,      -- Monday is 0; the same formula as weekday in dim_date.sql
     t.n_lines AS n_lines,
     t.units AS units,
     t.gross_sales AS gross_sales,
     t.item_total AS item_total,
     t.discount AS discount,
-    CASE
-        WHEN o.order_date >= :train_start AND o.order_date <= :train_end THEN 'train'
-        WHEN o.order_date > :train_end AND o.order_date < :valid_start THEN 'purge_1'
-        WHEN o.order_date >= :valid_start AND o.order_date < :valid_v2_start THEN 'valid_v1'
-        WHEN o.order_date >= :valid_v2_start AND o.order_date <= :valid_end THEN 'valid_v2'
-        WHEN o.order_date > :valid_end AND o.order_date < :test_start THEN 'purge_2'
-        WHEN o.order_date >= :test_start AND o.order_date <= :test_end THEN 'test'
-        WHEN o.order_date >= :post_break_start AND o.order_date <= :post_break_end THEN 'post_break'
-        ELSE 'outside'
-    END AS block,
+    COALESCE(b.block, 'outside') AS block,
     o.regime AS regime,
     CASE WHEN r.order_id IS NULL THEN 'open' WHEN r.is_cancelled = 1 THEN 'cancelled' ELSE 'closed' END AS outcome_status,
     r.outcome_known_date AS outcome_known_date,
@@ -56,6 +47,7 @@ FROM raw_orders AS o
 JOIN star_dim_geo AS g ON g.market = o.market AND g.order_region = o.order_region AND g.order_country = o.order_country
 JOIN main_line AS m ON m.order_id = o.order_id
 JOIN totals AS t ON t.order_id = o.order_id
+LEFT JOIN ref_block AS b ON o.order_date BETWEEN b.first_day AND b.last_day
 LEFT JOIN raw_outcomes AS r ON r.order_id = o.order_id
 LEFT JOIN model_scores AS s ON s.order_id = o.order_id
 ORDER BY o.order_id;

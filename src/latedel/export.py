@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +39,10 @@ MODEL_BUILD = (    # the dimensions first: fact_order reads dim_geo
     "fact_importance", "fact_validation",
 )
 METADATA_KEYS = ("latedel.run_key", "latedel.as_of", "latedel.source_sha256", "latedel.attribution")
+BLOCK_LABELS_ES = {            # the block of the split, as the calendar and the month dimensions name it
+    "train": "Entrenamiento", "purge_1": "Purga 1", "valid_v1": "Validación V1", "valid_v2": "Validación V2", "purge_2": "Purga 2", "test": "Prueba",
+    "post_break": "Posterior al cambio de forma",
+}
 
 
 @dataclass(frozen=True)
@@ -65,11 +69,29 @@ def _params(conn: sqlite3.Connection, cfg: PipelineConfig) -> dict[str, object]:
     return params
 
 
+def split_blocks(cfg: PipelineConfig) -> list[tuple[str, str, str, str]]:
+    """``(block, block_es, first_day, last_day)`` of each block of the split, from ``[split]`` (D08): the one place where the edges become blocks for the model marts.
+
+    The purges are the days between two blocks; a purge of no days has no row, and a date that no row holds is ``outside``.
+    """
+    s, day = cfg.split, timedelta(days=1)
+    edges = {
+        "train": (s.train_start, s.train_end), "purge_1": (s.train_end + day, s.valid_start - day), "valid_v1": (s.valid_start, s.valid_v2_start - day),
+        "valid_v2": (s.valid_v2_start, s.valid_end), "purge_2": (s.valid_end + day, s.test_start - day), "test": (s.test_start, s.test_end),
+        "post_break": (s.post_break_start, s.post_break_end),
+    }
+    return [(block, BLOCK_LABELS_ES[block], first.isoformat(), last.isoformat()) for block, (first, last) in edges.items() if first <= last]
+
+
 def _load_references(conn: sqlite3.Connection, cfg: PipelineConfig) -> None:
-    """``ref_method`` (the Spanish label of each method) and ``ref_seal`` (whether each registered configuration is the sealed one), from the code and the seal file."""
+    """``ref_method`` (the Spanish label of each method), ``ref_block`` (the blocks of the split with their first and last day) and ``ref_seal`` (whether each registered
+    configuration is the sealed one), from the code, ``[split]`` and the seal file. The calendar, the months and the orders join ``ref_block``: the edges are not written again."""
     conn.execute("DROP TABLE IF EXISTS ref_method")
     conn.execute("CREATE TABLE ref_method (method TEXT PRIMARY KEY, label_es TEXT NOT NULL, sort_order INTEGER NOT NULL)")
     conn.executemany("INSERT INTO ref_method VALUES (?, ?, ?)", [(m, METHOD_LABELS_ES[m], i) for i, m in enumerate(METHODS, start=1)])
+    conn.execute("DROP TABLE IF EXISTS ref_block")
+    conn.execute("CREATE TABLE ref_block (block TEXT PRIMARY KEY, block_es TEXT NOT NULL, first_day TEXT NOT NULL, last_day TEXT NOT NULL)")
+    conn.executemany("INSERT INTO ref_block VALUES (?, ?, ?, ?)", split_blocks(cfg))
     seal = read_seal(cfg.paths.seal)
     conn.execute("DROP TABLE IF EXISTS ref_seal")
     conn.execute("CREATE TABLE ref_seal (model_version TEXT PRIMARY KEY, seal_state TEXT NOT NULL)")

@@ -36,10 +36,11 @@ def test_without_hard_links_the_seal_is_created_once_and_a_second_creator_finds_
     assert [p.name for p in tmp_path.iterdir()] == ["seal.json"], "no temporary file is left"
 
 
-def test_a_windows_file_system_without_hard_links_is_also_the_fallback(tmp_path, monkeypatch):
+@pytest.mark.parametrize("winerror", [1, 50])       # ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED: the two answers of a volume without hard links
+def test_a_windows_file_system_without_hard_links_is_also_the_fallback(tmp_path, monkeypatch, winerror):
     def link(src, dst, **kwargs):
         error = OSError("Incorrect function")
-        error.winerror = 1               # ERROR_INVALID_FUNCTION: what NTFS-less volumes answer to a hard link
+        error.winerror = winerror
         raise error
 
     monkeypatch.setattr(os, "link", link)
@@ -148,3 +149,60 @@ def test_a_second_writer_with_the_same_values_is_no_conflict(cfg, tmp_path, monk
 def test_an_ordinary_first_write_still_verifies_and_leaves_one_file(cfg, tmp_path):
     path = seal_with_launch(cfg, tmp_path)
     assert write_test_seal(path, part_of_test(cfg)) == "written" and [p.name for p in tmp_path.iterdir()] == ["seal.json"]
+
+
+# --- H4: the advisories of the native review of H3 -----------------------------------------------------------------------------------------------
+
+
+def test_a_windows_error_that_is_not_the_lack_of_hard_links_is_raised_and_nothing_is_created(tmp_path, monkeypatch):
+    """R3-001: of the Windows codes only 1 and 50 are the lack of hard links; a full disk (112) is an error, not a reason to fall back."""
+    def link(src, dst, **kwargs):
+        error = OSError("There is not enough space on the disk")
+        error.winerror = 112
+        raise error
+
+    monkeypatch.setattr(os, "link", link)
+    with pytest.raises(OSError, match="enough space"):
+        _create_exclusive(tmp_path / "seal.json", b"first\n")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_fallback_creates_the_seal_with_the_owner_only_mode_of_the_main_path(tmp_path, monkeypatch):
+    """R1-001: the temporary file of the main path is created by ``mkstemp`` with 0600; the file of the fallback asked for 0644 and was readable by every local user."""
+    modes = []
+    real_open = os.open
+
+    def recording_open(path, flags, mode=0o777, **kwargs):
+        modes.append(mode)
+        return real_open(path, flags, mode, **kwargs)
+
+    without_hard_links(monkeypatch)
+    monkeypatch.setattr(os, "open", recording_open)
+    path = tmp_path / "seal.json"
+    assert _create_exclusive(path, b"first\n") is True
+    assert modes and set(modes) == {0o600}, "every file the creation opens (the temporary one of mkstemp and the seal itself) is for its owner only"
+    if os.name == "posix":                                    # on Windows the mode bits of os.open only decide if the file is read-only: the access is the ACL of the folder
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="on Windows the mode bits are not the access control")
+def test_the_main_path_and_the_fallback_leave_the_same_mode(tmp_path, monkeypatch):
+    main, fallback = tmp_path / "main.json", tmp_path / "fallback.json"
+    assert _create_exclusive(main, b"x\n") is True
+    without_hard_links(monkeypatch)
+    assert _create_exclusive(fallback, b"x\n") is True
+    assert main.stat().st_mode & 0o777 == fallback.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_lost_update_of_the_test_part_is_logged_with_both_runs_where_it_is_detected(cfg, tmp_path, monkeypatch, caplog):
+    """R4-001: detection is the design (one writer, D61; exclusion would leave an orphan lock, D64), but the point of detection says who wrote what."""
+    import logging
+
+    path = seal_with_launch(cfg, tmp_path)
+    other = part_of_test(cfg, run_key="run-other", metrics={"model": {"auc": 0.5}, "b2_mode": {"auc": 0.74}, "b5_mode_noon": {"auc": 0.781}})
+    another_writer_wins(monkeypatch, path, other)
+    with caplog.at_level(logging.ERROR, logger="latedel.registry"), pytest.raises(SealMismatchError, match="R7"):
+        write_test_seal(path, part_of_test(cfg, run_key="run-mine"))
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR and r.name == "latedel.registry"]
+    assert len(errors) == 1 and "run-mine" in errors[0] and "run-other" in errors[0] and "R7" in errors[0]
+    assert read_seal(path)["test"]["run_key"] == "run-other", "the file keeps what the other writer put there, as before"

@@ -179,6 +179,10 @@ def _dump(document: dict) -> str:
     return json.dumps(document, sort_keys=True, indent=1, ensure_ascii=False) + "\n"
 
 
+# The mode of the seal file, the same one ``tempfile.mkstemp`` gives the temporary file of the main path: for its owner only. Enforced where the mode bits are the access
+# control (POSIX). On Windows ``os.open`` takes only the read-only bit of the mode, so the file gets the access list of its folder, on both paths alike (H4, R1-001).
+SEAL_MODE = 0o600
+
 # What the system answers to a hard link on a file system that has none (FAT and exFAT, some network shares). Any other error of ``os.link`` is a real error.
 _NO_HARD_LINKS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.ENOSYS})
 _WINDOWS_NO_HARD_LINKS = frozenset({1, 50})      # ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED
@@ -219,7 +223,7 @@ def _create_without_link(path: Path, data: bytes) -> bool:
     ``SealError`` (a seal that cannot be read is never taken for an absent one), not a wrong seal.
     """
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o644)
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), SEAL_MODE)
     except FileExistsError:
         return False
     try:
@@ -313,6 +317,7 @@ def write_test_seal(seal_path: Path, test: Mapping[str, Any]) -> Literal["writte
     # result would have replaced this one without a word. Read it back: if the file does not say what was written, say so.
     kept = (read_seal(path) or {}).get("test") or {}
     if _rounded({k: kept.get(k) for k in ("criteria", "metrics")}) != _rounded({k: test[k] for k in ("criteria", "metrics")}):
+        logger.error("seal: the test part written by run %s was replaced by the one of run %s with other values (runbook R7)", test["run_key"], kept.get("run_key"))
         raise SealMismatchError("otra escritura reemplazó la parte de la prueba mientras se escribía la de esta corrida: lo que consta en el sello no es lo que esta corrida calculó (docs/runbook.md, R7)")
     logger.info("seal: test part written to %s", path.name)
     return "written"
