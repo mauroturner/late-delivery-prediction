@@ -324,3 +324,53 @@ def copy_history(history, tmp_path):
     yield build
     for conn in opened:
         conn.close()
+
+
+@pytest.fixture(scope="session")
+def star_warehouse(history, tmp_path_factory: pytest.TempPathFactory):
+    """The history after everything the flow does around the model: the test and the post-break block evaluated at the close, the importance and the leakage written at
+    the launch, the follow-up of the last two dates, a record for every run (the last one still ``running``, as when the export runs) and a few validation results.
+
+    ``(cfg, db, folder)``; the export is not done. Tests that write copy ``db`` first.
+    """
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from latedel.evaluation import evaluate, record_launch_tables
+    from latedel.tracking import track
+    from latedel.validate import ValidationReport, make_result
+    from latedel.warehouse import connect, record_run, record_validation_results
+
+    folder = tmp_path_factory.mktemp("star_warehouse")
+    shutil.copytree(history.folder / "launch", folder / "launch")
+    db = folder / "star.sqlite"
+    shutil.copyfile(history.db, db)
+    base = history.cfg
+    cfg = replace(
+        base, paths=replace(base.paths, seal=folder / "launch" / "reports" / "model_seal.json", models_dir=folder / "launch" / "models"),
+        evaluation=replace(base.evaluation, bootstrap_resamples=200, importance_repeats=1),
+    )
+    conn = connect(db)
+    close = cfg.deliveries.close_date
+    evaluate(conn, cfg, run_key=f"run-C{close:%Y-%m}", as_of=close, config_sha256=history.config_sha256)
+    record_launch_tables(conn, cfg, as_of=cfg.deliveries.launch_date)
+    for spec in history.plan[-2:]:
+        track(conn, spec.as_of)
+    last = history.plan[-1]
+    for index, spec in enumerate(history.plan):
+        status = "running" if spec is last else "ok"
+        record_run(conn, {
+            "run_key": f"run-{spec.delivery_id}", "started_at": f"{spec.as_of}T08:00:00", "finished_at": None if status == "running" else f"{spec.as_of}T08:01:00", "status": status,
+            "delivery_id": spec.delivery_id, "as_of_date": spec.as_of.isoformat(), "source_sha256": "ab" * 32, "orders_delivery": index * 10, "outcomes_delivery": index * 9,
+            "orders_scored": 0 if index == 0 else index * 10, "alerts": index * 4, "peak_working_set_mb": 512.5, "peak_commit_mb": None, "message": "",
+        })
+    # one run that was rejected, as a blocking rule that failed, and the rules of the others
+    record_run(conn, {"run_key": "run-rejected", "started_at": "2017-03-01T08:00:00", "finished_at": "2017-03-01T08:00:30", "status": "rejected", "message": "V24"})
+    record_validation_results(conn, ValidationReport("run-rejected", "ab" * 32, None, 0, [make_result("V24", False, rows=3, orders=2), make_result("V20", True)]))
+    for spec in history.plan[:3]:
+        record_validation_results(conn, ValidationReport(
+            f"run-{spec.delivery_id}", "ab" * 32, spec.delivery_id, 10,
+            [make_result("V20", True), make_result("V11", False, rows=7, orders=4), make_result("M05", True), make_result("I02", True, rows=5, orders=9)],
+        ))
+    conn.close()
+    return SimpleNamespace(cfg=cfg, db=db, folder=folder, plan=history.plan)
