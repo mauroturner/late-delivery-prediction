@@ -1,8 +1,10 @@
 """DAG ``latedel_monthly``: the eleven tasks of ``latedel.pipeline.TASKS``, wired in their order.
 
 The DAG only wires: each task calls ``latedel.pipeline.run_task(task_id, run_id)``, the same function the command line runs, so Airflow and ``python -m latedel run`` do the
-same work in the same order. The delivery is a short circuit: with no delivery left to load the run ends there (as ``no_delivery``) and the rest is skipped. It runs once a
-month, on the 2nd (the delivery of the month before is ready), with one active run and one active task at a time, because the warehouse is a SQLite file with a single writer.
+same work in the same order. The task whose ``TaskSpec`` has ``short_circuit=True``, ``deliver``, is an ``@task.short_circuit``: with no delivery left to load the pipeline
+records the run as ``no_delivery`` in ``pipeline_runs`` and in its state file, the task returns False and Airflow skips the rest. It runs once a month, on the 2nd (the
+delivery of the month before is ready), with one active run and one active task at a time, because the warehouse is a SQLite file with a single writer
+(``airflow dags test`` in the debug service of the compose file runs outside that guard: the compose file says how to run it).
 """
 
 from __future__ import annotations

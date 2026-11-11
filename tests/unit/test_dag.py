@@ -206,3 +206,14 @@ def test_a_rejection_a_leak_or_a_refusal_fails_the_task_at_once_and_a_transport_
     for node in dag.nodes:
         with pytest.raises(ConnectionError):   # not an AirflowFailException: Airflow retries it as the task's options say
             node.function(run_id="manual__x")
+
+
+def test_the_docstring_names_the_short_circuit_task_and_the_status_the_pipeline_records(tree: ast.Module) -> None:
+    """R3-no-delivery-docstring-mismatch (review of U23): the docstring said the run ends ``as no_delivery`` without naming the task; it names the task whose
+    ``TaskSpec`` is the short circuit and the status of ``pipeline_runs`` that the pipeline records, both read here from the code."""
+    from latedel.pipeline import CLOSED_STATUSES
+
+    doc = ast.get_docstring(tree)
+    [short] = [spec.task_id for spec in TASKS if spec.short_circuit]
+    assert f"``{short}``" in doc and "short_circuit=True" in doc
+    assert "``no_delivery``" in doc and "no_delivery" in CLOSED_STATUSES and "pipeline_runs" in doc

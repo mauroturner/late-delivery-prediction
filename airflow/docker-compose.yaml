@@ -3,7 +3,9 @@
 #   - LocalExecutor: no redis, no celery worker and no flower (less memory; one task at a time anyway);
 #   - build the image of Dockerfile (Airflow plus the libraries of the pipeline, with the same == pins as the command
 #     line) from the project folder instead of using the plain one; only the airflow-init service has the `build` key (see there);
-#   - the DAGs are mounted read-only (./dags): no task can rewrite the file that defines the next one;
+#   - the DAGs and the plugins are mounted read-only (./dags, ./plugins): no task can rewrite the file that defines the next one, nor
+#     drop code that Airflow would load (review of U23); ./logs and ./config stay writable because Airflow writes them (the logs, and
+#     the airflow.cfg it creates in the folder of AIRFLOW_CONFIG when it is missing: checked with the image, decision D80);
 #   - the project is mounted at /opt/latedel piece by piece: src/, sql/ and config/ read-only, and only data/, outputs/,
 #     reports/ and dashboard/ read-write; the pipeline reads it through PYTHONPATH, LATEDEL_HOME and LATEDEL_CONFIG;
 #   - the interface is published on 127.0.0.1 only, and every secret has no default and comes from the environment: the JWT
@@ -46,7 +48,7 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags:ro
     - ./logs:/opt/airflow/logs
     - ./config:/opt/airflow/config
-    - ./plugins:/opt/airflow/plugins
+    - ./plugins:/opt/airflow/plugins:ro
     - ../src:/opt/latedel/src:ro
     - ../sql:/opt/latedel/sql:ro
     - ../config:/opt/latedel/config:ro
@@ -54,6 +56,9 @@ x-airflow-common:
     - ../outputs:/opt/latedel/outputs
     - ../reports:/opt/latedel/reports
     - ../dashboard:/opt/latedel/dashboard
+  # The user of every Airflow container. On Linux, set AIRFLOW_UID in airflow/.env to your own id (`id -u`): the folders the bind mounts
+  # create (logs, config, plugins) then belong to you and not to the uid 50000, which you could not delete or edit afterwards. Docker
+  # Desktop on Windows and macOS maps the files to your user and does not need it (runbook R8, decision D80).
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -155,7 +160,7 @@ services:
         mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
         /entrypoint airflow version
         /entrypoint airflow config list >/dev/null
-        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,plugins,config}
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,config}
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
@@ -165,6 +170,10 @@ services:
     user: "0:0"
 
   # `docker compose --profile debug run --rm airflow-cli airflow dags test latedel_monthly`
+  # `airflow dags test` runs the DAG in this container, outside the scheduler and so outside its max_active_runs=1 and max_active_tasks=1:
+  # next to a scheduler that is running the monthly run there would be two writers of the SQLite warehouse in ../data. Run it with the
+  # scheduler stopped (`docker compose stop airflow-scheduler`, and `docker compose start airflow-scheduler` after); ../data stays writable
+  # here because `dags test` writes the warehouse (runbook R8, decision D80).
   airflow-cli:
     <<: *airflow-common
     profiles:

@@ -15,7 +15,8 @@ AIRFLOW = PROJECT / "airflow"
 SECRETS = ("FERNET_KEY", "AIRFLOW__API_AUTH__JWT_SECRET", "_AIRFLOW_WWW_USER_PASSWORD", "LATEDEL_DB_PASSWORD")
 REQUIRED = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*):\?(?P<message>[^}]*)\}")   # ${NAME:?message}: the file refuses to start without NAME
 SECRET_NAME = re.compile(r"PASSWORD|SECRET|KEY|TOKEN", re.IGNORECASE)
-USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?P<user>[^:/@\s]*):(?P<password>[^@/\s]+)@")   # scheme://user:password@host
+# scheme://user:password@host; the password is a whole ${...} interpolation (whose message may have spaces and slashes) or a run of characters that a URL allows
+USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?P<user>[^:/@\s]*):(?P<password>\$\{[^}]*\}|[^@/\s]+)@")
 
 
 def code_lines(text: str) -> list[str]:
@@ -181,7 +182,7 @@ def test_the_dags_are_mounted_read_only_and_the_init_does_not_chown_them(compose
     local = [line.split("-", 1)[1].strip() for line in code_lines(compose) if re.match(r"\s*-\s*\./", line)]
     dags = [m for m in local if m.startswith("./dags:")]
     assert dags == ["./dags:/opt/airflow/dags:ro"]
-    assert {m.split(":")[0] for m in local if not m.endswith(":ro")} == {"./logs", "./config", "./plugins"}   # what Airflow itself writes
+    assert {m.split(":")[0] for m in local if not m.endswith(":ro")} == {"./logs", "./config"}   # what Airflow itself writes (./plugins is read-only since H8)
     chown = [line for line in code_lines(compose) if "chown" in line]
     assert len(chown) == 1 and "dags" not in chown[0]   # a read-only mount cannot be chowned: the init would fail
 
@@ -222,3 +223,62 @@ def test_a_failed_migration_makes_the_init_exit_non_zero(compose, tmp_path):
     assert done.returncode == 3, done.stdout + done.stderr
     assert done.stderr.count("migration failed") == 1   # the second /entrypoint call never runs
     assert (tmp_path / "airflow" / "logs").is_dir()   # the commands before the failure did run
+
+
+# --- H8: the advisories of the review of U23 -----------------------------------------------------------------------------------------------------------
+
+
+def service_block(compose: str, name: str) -> str:
+    """The text of one service of the compose file, comments included, up to the next service (or the end of ``services``)."""
+    found = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z#]|^\S)", compose, flags=re.MULTILINE | re.DOTALL)
+    assert found, name
+    return found.group(1)
+
+
+def test_the_plugins_are_read_only_and_only_what_airflow_writes_is_writable(compose):
+    """R1-001: ``./plugins`` was writable by every Airflow container, and Airflow loads the code dropped there. Airflow does not write it, so it is read-only like
+    ``./dags``; ``./logs`` and ``./config`` stay writable because Airflow writes them (the logs of the tasks, and ``airflow.cfg``, which it creates in the folder of
+    ``AIRFLOW_CONFIG`` when it is missing), and the init no longer changes the owner of the read-only folders."""
+    local = [line.split("-", 1)[1].strip() for line in code_lines(compose) if re.match(r"\s*-\s*\./", line)]
+    assert "./plugins:/opt/airflow/plugins:ro" in local and "./dags:/opt/airflow/dags:ro" in local
+    assert {m.split(":")[0] for m in local if not m.endswith(":ro")} == {"./logs", "./config"}
+    assert "AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'" in compose
+    [chown] = [line for line in init_script(compose).splitlines() if "chown" in line]
+    assert "plugins" not in chown and "dags" not in chown and "logs" in chown and "config" in chown
+
+
+def test_the_debug_service_says_it_runs_outside_the_guard_of_one_active_run(compose):
+    """R4-airflow-cli-sqlite-writer-bypass: ``airflow dags test`` in the debug service runs outside the scheduler and its ``max_active_runs=1``, so next to a running
+    scheduler there would be two writers of the SQLite warehouse. Its ``../data`` stays writable (``dags test`` writes the warehouse, and the Docker test runs it); the
+    comment over the service says to stop the scheduler first."""
+    text = compose[compose.index("  # `docker compose --profile debug"):]
+    comment = " ".join(line.strip().lstrip("#").strip() for line in text.splitlines()[:8] if line.strip().startswith("#"))
+    for needle in ("max_active_runs", "SQLite", "docker compose stop airflow-scheduler", "runbook"):
+        assert needle in comment, needle
+
+
+def test_the_compose_file_says_how_to_set_airflow_uid(compose):
+    """R3-airflow-uid-default-ownership: every Airflow container runs as ``${AIRFLOW_UID:-50000}``; on Linux the folders the bind mounts create belong to that user.
+    The compose file says to set it to the user's own id (the line for ``.env.example`` is the owner's: this unit does not touch that file)."""
+    common = re.search(r"^x-airflow-common:\n(.*?)^services:", compose, flags=re.MULTILINE | re.DOTALL).group(1)
+    assert 'user: "${AIRFLOW_UID:-50000}:0"' in common
+    comments = " ".join(line.strip() for line in common.splitlines() if line.strip().startswith("#"))
+    assert "AIRFLOW_UID" in comments and "id -u" in comments and "Linux" in comments
+
+
+def test_the_userinfo_detector_reads_the_real_connection_string_whole(compose):
+    """R3-userinfo-regex-blind-spot: the password of ``scheme://user:password@`` was ``[^@/\\s]+``, so the real ``${LATEDEL_DB_PASSWORD:?message}``, whose message has
+    spaces and ``/``, never matched: the check passed without looking at the real string. Now the interpolation is read whole and is the required variable."""
+    [connection] = [v for k, v in values_of(compose) if k == "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]
+    [match] = list(USERINFO.finditer(connection))
+    assert match.group("user") == "airflow" and REQUIRED.fullmatch(match.group("password"))
+    assert match.group("password").startswith("${LATEDEL_DB_PASSWORD:?") and " " in match.group("password") and "/" in match.group("password")
+
+
+@pytest.mark.parametrize("literal", ["hunter2", "${LATEDEL_DB_PASSWORD:-airflow}", "${LATEDEL_DB_PASSWORD}x", "pa%2Fss"])
+def test_a_literal_password_in_the_real_connection_string_is_found(compose, literal):
+    [connection] = [v for k, v in values_of(compose) if k == "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]
+    password = re.search(r"airflow:(\$\{LATEDEL_DB_PASSWORD:\?[^}]*\})@postgres", connection).group(1)
+    mutated = compose.replace(f"airflow:{password}@postgres", f"airflow:{literal}@postgres", 1)
+    assert mutated != compose
+    assert any("a password in a connection string" in p or "a secret with a default" in p or "used without ':?'" in p for p in find_literal_secrets(mutated)), literal
