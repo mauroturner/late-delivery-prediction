@@ -494,3 +494,56 @@ def monthly(fitted_launch, delivered, tmp_path):
     folder, plan, entries = delivered
     yield conn, load_registered_model(conn, fitted_launch.cfg), fitted_launch.cfg, folder, plan, entries
     conn.close()
+
+
+# --- runs of the whole pipeline over the synthetic fixture, built once per session and copied by the tests that change them ---------------------------------
+
+
+def relocate(template: Path, root: Path, csv_path: Path):
+    """A copy of the project folder `template` under `root` and its configuration (every path of the configuration is under the folder, so the copy is a project of its own)."""
+    from tests.fixtures.helpers import make_cfg
+
+    shutil.copytree(template, root)
+    return make_cfg(root, csv_path)
+
+
+@pytest.fixture(scope="session")
+def pipeline_source(fixture_csv: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A project folder where only the first task ran: the pinned source registered and the three interim streams built from the fixture."""
+    from latedel.pipeline import run_all
+    from tests.fixtures.helpers import make_cfg
+
+    root = tmp_path_factory.mktemp("pipeline_source") / "p"
+    run_all(make_cfg(root, fixture_csv), only=["fetch_source"], run_key="source")
+    shutil.rmtree(root / "interim" / "runs")          # the state of that run is not part of the source
+    return root
+
+
+@pytest.fixture(scope="session")
+def pipeline_interrupted(fixture_csv: Path, pipeline_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The run ``r1`` (the launch delivery) up to and including its export: what is left when the process is killed after exporting."""
+    from latedel.pipeline import TASK_IDS, run_all
+
+    root = tmp_path_factory.mktemp("pipeline_interrupted") / "p"
+    run_all(relocate(pipeline_source, root, fixture_csv), only=list(TASK_IDS[: TASK_IDS.index("export") + 1]), run_key="r1")
+    return root
+
+
+@pytest.fixture(scope="session")
+def pipeline_closed(fixture_csv: Path, pipeline_interrupted: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The same run resumed from ``render_dashboard`` to the end: the run ``r1`` of the launch, closed."""
+    from latedel.pipeline import run_all
+
+    root = tmp_path_factory.mktemp("pipeline_closed") / "p"
+    run_all(relocate(pipeline_interrupted, root, fixture_csv), start="render_dashboard", run_key="r1")
+    return root
+
+
+@pytest.fixture(scope="session")
+def pipeline_two_runs(fixture_csv: Path, pipeline_closed: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The launch (``r1``) and the delivery ``M2017-01`` (``r2``), both closed."""
+    from latedel.pipeline import run_all
+
+    root = tmp_path_factory.mktemp("pipeline_two_runs") / "p"
+    run_all(relocate(pipeline_closed, root, fixture_csv), run_key="r2")
+    return root

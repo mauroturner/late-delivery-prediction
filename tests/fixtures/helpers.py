@@ -65,3 +65,43 @@ def rebuild_layers(conn, cfg, as_of) -> None:
     conn.execute("BEGIN IMMEDIATE")
     warehouse._build_layers(conn, warehouse.sql_params(cfg, as_of))
     conn.execute("COMMIT")
+
+
+# --- a project folder for the tests of the pipeline ---------------------------------------------------------------------------------------------
+
+
+def snapshot(folder: Path) -> dict[str, str]:
+    """The SHA-256 of every file under `folder`, by relative path (empty for a folder that does not exist): what a refused or rejected run must leave as it was."""
+    folder = Path(folder)
+    if not folder.exists():
+        return {}
+    return {p.relative_to(folder).as_posix(): file_digest(p) for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+def write_config(root: Path, csv_path: Path, *, sets: tuple[str, ...] = ("f2",), extra: str = "") -> Path:
+    """``root/config/test.toml``: the real configuration with a local source, one point of the model grid with 30 boosting iterations (the tests of the pipeline are about
+    what the tasks do with the model, not about what it learns), a small bootstrap and every path under `root`.
+
+    The project folder is the parent of the folder that holds the main configuration file (decision D24), so the relative paths resolve to `root` whatever the working
+    directory. `extra` is appended (TOML text) for the tests that change another key.
+    """
+    from latedel.config import DEFAULT_CONFIG
+
+    path = Path(root) / "config" / "test.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'extends = "{DEFAULT_CONFIG.as_posix()}"\n\n[source]\nmode = "local"\nurl = ""\nlocal_path = "{Path(csv_path).as_posix()}"\naccepted_sha256 = ""\n\n'
+        f'[features]\ncandidate_sets = {list(sets)!r}\n\n'.replace("'", '"')
+        + '[model]\nlearning_rate = [0.1]\nmax_leaf_nodes = [15]\nmin_samples_leaf = [20]\nmax_iter = 30\n\n[evaluation]\nbootstrap_resamples = 50\nimportance_repeats = 2\n\n'
+        '[paths]\nraw_dir = "raw"\ninterim_dir = "interim"\nwarehouse = "wh.sqlite"\nmodels_dir = "models"\noutputs_dir = "outputs/powerbi"\nsite_dir = "outputs/site"\n'
+        'reports_dir = "reports"\nseal = "reports/model_seal.json"\ndashboard_html = "dashboard/powerbi-design.html"\nreadme = "README.md"\nfigures_dir = "figures"\n' + extra,
+        encoding="utf-8",
+    )
+    return path
+
+
+def make_cfg(root: Path, csv_path: Path, **kwargs):
+    """The configuration of ``write_config`` loaded."""
+    from latedel.config import load_config
+
+    return load_config(write_config(root, csv_path, **kwargs))
