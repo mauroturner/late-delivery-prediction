@@ -23,7 +23,7 @@ import pytest
 from latedel.export import ExportMeta, build_powerbi_marts
 from latedel.registry import read_seal
 from latedel.schema import ATTRIBUTION, DUPLICATE_OR_CONSTANT_COLUMNS, LEAKING_COLUMNS, PERSONAL_COLUMNS
-from latedel.site_export import SITE_FILES, SiteExportError, export_site, export_summary
+from latedel.site_export import MANIFEST_FILE, SITE_FILES, SiteExportError, export_site, export_summary
 from latedel.tracking import track
 from latedel.validate import RULES
 from latedel.warehouse import record_run
@@ -256,20 +256,23 @@ class ImportanceRow:
 
 @dataclass
 class ExampleRow:
+    """One example of a cell of B5. The six details (month, hour, weekday, market, lines, real days) are null when publishing them would leave the example shared by
+    fewer than ``min_cell_orders`` orders of the test (H5, D77)."""
+
     label: str
     rule_es: str
-    month: str
+    month: str | None
     mode: str
     mode_es: str
     scheduled_days: int
-    order_hour: int
-    weekday_es: str
-    market: str
-    n_lines: int
+    order_hour: int | None
+    weekday_es: str | None
+    market: str | None
+    n_lines: int | None
     risk: float
     is_alert: bool
     outcome: str
-    real_days: int
+    real_days: int | None
 
 
 @dataclass
@@ -407,6 +410,18 @@ def approx(value, digits):
     return pytest.approx(value, abs=0.6 * 10 ** -digits)
 
 
+def expected_hidden(counts: list[int], minimum: int, total_published: bool = True) -> list[bool]:
+    """Which cells of one breakdown are hidden, written again here (D07 and the secondary suppression of D77): a cell under the minimum (an empty one too) and, when
+    that leaves exactly one hidden cell in a breakdown whose total is published somewhere, the smallest shown cell (the first one on a tie); in a breakdown whose own
+    total is hidden, the smallest shown cell if no cell is hidden."""
+    hidden = [n < max(minimum, 1) for n in counts]
+    if (total_published and sum(hidden) == 1) or (not total_published and not any(hidden)):
+        shown = [(n, i) for i, (n, h) in enumerate(zip(counts, hidden, strict=True)) if not h]
+        if shown:
+            hidden[min(shown)[1]] = True
+    return hidden
+
+
 def walk(node, path=""):
     """Every ``(path, key, value)`` of a JSON document."""
     if isinstance(node, dict):
@@ -434,8 +449,8 @@ def objects(node, path=""):
 
 def test_no_identifier_or_sentinel_and_small_cells_suppressed(star_export, site, frames, fixture_truth, tmp_path):
     """AC26: no order number, customer identifier or personal value in any file, and no aggregate cell under the minimum size with its value."""
-    assert sorted(p.name for p in site.iterdir()) == sorted(SITE_FILES)
-    raw = b"".join((site / name).read_bytes() for name in SITE_FILES)
+    assert sorted(p.name for p in site.iterdir()) == sorted([*SITE_FILES, MANIFEST_FILE])
+    raw = b"".join((site / name).read_bytes() for name in [*SITE_FILES, MANIFEST_FILE])
     for needle in fixture_truth.sentinel_needles:
         assert needle not in raw, "a sentinel of a personal column reached the files"
     order_ids = set(map(str, frames["fact_order"]["order_id"]))
@@ -485,9 +500,9 @@ def test_the_five_files_keep_the_schema_of_the_contract(docs, site, star_export)
 
 def test_the_files_are_the_same_bytes_every_time_and_leave_no_temporary_file(star_export, site, tmp_path):
     export_site(star_export.conn, tmp_path / "again", META, star_export.cfg)
-    for name in SITE_FILES:
+    for name in [*SITE_FILES, MANIFEST_FILE]:
         assert (tmp_path / "again" / name).read_bytes() == (site / name).read_bytes(), name
-    assert sorted(p.name for p in (tmp_path / "again").iterdir()) == sorted(SITE_FILES)
+    assert sorted(p.name for p in (tmp_path / "again").iterdir()) == sorted([*SITE_FILES, MANIFEST_FILE])
 
 
 # --- the figures are the ones of the Parquet files -----------------------------------------------------------------------------------------------
@@ -575,12 +590,14 @@ def test_the_split_the_mode_rates_and_the_hours_come_from_the_orders_of_the_trai
     order = frames["fact_order"]
     task = order[order["outcome_status"] != "cancelled"]
     assert [b.block for b in a.split] == ["train", "purge_1", "valid_v1", "valid_v2", "purge_2", "test", "post_break"]
+    hidden = expected_hidden([int((task["block"] == b.block).sum()) for b in a.split], 20)
+    assert [b.suppressed for b in a.split] == hidden
     s = star_export.cfg.split
     assert (a.split[0].start, a.split[0].end, a.split[5].start, a.split[5].end) == (s.train_start.isoformat(), s.train_end.isoformat(), s.test_start.isoformat(), s.test_end.isoformat())
     for b in a.split:
         mine = task[task["block"] == b.block]
         if b.suppressed:
-            assert len(mine) < 20 and b.orders is None and b.late_share is None
+            assert b.orders is None and b.late_share is None
             continue
         assert b.orders == len(mine)
         closed = mine[mine["outcome_status"] == "closed"]
@@ -588,13 +605,17 @@ def test_the_split_the_mode_rates_and_the_hours_come_from_the_orders_of_the_trai
     train = task[(task["block"] == "train") & (task["outcome_status"] == "closed")]
     modes = frames["dim_shipping_mode"].sort_values("sort_order")
     assert [m.mode for m in a.mode_rates] == list(modes["mode_key"])
+    assert [m.suppressed for m in a.mode_rates] == expected_hidden([int((train["mode_key"] == m.mode).sum()) for m in a.mode_rates], 20)
     for m in a.mode_rates:
         mine = train[train["mode_key"] == m.mode]
-        assert m.train_orders == len(mine) and m.train_late_rate == approx(mine["is_late"].astype(float).mean(), 3)
+        assert m.suppressed or (m.train_orders == len(mine) and m.train_late_rate == approx(mine["is_late"].astype(float).mean(), 3))
     assert len(a.hour_profile) == 96 and {h.hour for h in a.hour_profile} == set(range(24))
+    for m in a.mode_rates:
+        hours = [h for h in a.hour_profile if h.mode == m.mode]
+        counts = [int(((train["mode_key"] == m.mode) & (train["order_hour"] == h.hour)).sum()) for h in hours]
+        assert [h.suppressed for h in hours] == expected_hidden(counts, 20, total_published=not m.suppressed), m.mode
     for h in a.hour_profile:
         mine = train[(train["mode_key"] == h.mode) & (train["order_hour"] == h.hour)]
-        assert h.suppressed == (len(mine) < 20)
         if not h.suppressed:
             assert h.train_orders == len(mine) and h.train_late_rate == approx(mine["is_late"].astype(float).mean(), 3)
     # the hours of the fixture have few orders each: with a minimum of one order the cells show, and the noon cut of Same Day (D10) is there
@@ -636,8 +657,8 @@ def test_methods_roc_calibration_and_cost_curve_are_the_ones_of_the_test(docs, f
     assert len(a.calibration) == star_export.cfg.evaluation.calibration_bins
     cal = frames["fact_calibration"]
     cal = cal[(cal["scope"] == "test") & (cal["method"] == "model") & (cal["seal_state"] == "sealed")].set_index("bin")
+    assert [c.suppressed for c in a.calibration] == expected_hidden([int(cal.loc[c.bin, "orders"]) for c in a.calibration], 20)
     for c in a.calibration:
-        assert c.suppressed == (cal.loc[c.bin, "orders"] < 20)
         if not c.suppressed:
             assert c.orders == cal.loc[c.bin, "orders"] and c.observed == approx(cal.loc[c.bin, "observed"], 3)
     assert len(a.cost_curve) == 17 and [c.break_even for c in a.cost_curve] == sorted(c.break_even for c in a.cost_curve)
@@ -671,8 +692,11 @@ def test_the_examples_follow_the_fixed_rule_and_publish_only_the_month(docs, fra
     assert len(expected) == len(a.examples) >= 4
     assert [e.label for e in a.examples] == [f"Pedido {c}" for c in "ABCDE"][: len(expected)]
     for got, want in zip(a.examples, expected, strict=True):
-        assert (got.mode, got.month, got.order_hour, got.real_days, got.n_lines) == (want["mode"], want["month"], want["hour"], want["real_days"], want["n_lines"])
-        assert got.risk == approx(want["risk"], 2) and got.outcome in ("tarde", "a tiempo") and re.fullmatch(r"\d{4}-\d{2}", got.month)
+        assert got.mode == want["mode"] and got.risk == approx(want["risk"], 2) and got.outcome in ("tarde", "a tiempo")
+        # a detail is the order's own value, or null when it would narrow the example below the minimum (the rule is pinned in test_site_export_hardening.py)
+        for field, key in (("month", "month"), ("order_hour", "hour"), ("real_days", "real_days"), ("n_lines", "n_lines")):
+            assert getattr(got, field) in (None, want[key]), (got.label, field)
+        assert got.month is None or re.fullmatch(r"\d{4}-\d{2}", got.month)
     text = (site / "algorithms.json").read_text(encoding="utf-8")
     assert "order_ts" not in text and not re.search(r"\d{4}-\d{2}-\d{2}T", text), "no timestamp of an order"
 
@@ -683,11 +707,11 @@ def test_alerts_months_modes_and_markets_are_the_follow_up_of_the_last_date(docs
     assert al.threshold == approx(model["threshold"], 2) and al.model_version == model["model_version"]
     track = frames["fact_tracking_monthly"]
     assert [m.month for m in al.monthly] == sorted({f"{k // 100:04d}-{k % 100:02d}" for k in track["month_key"]})
+    assert [m.suppressed for m in al.monthly] == expected_hidden([int(track[track["month_key"] == int(m.month.replace("-", ""))]["orders_scored"].sum()) for m in al.monthly], 20)
     for m in al.monthly:
         key = int(m.month.replace("-", ""))
         part = track[track["month_key"] == key]
         scored = int(part["orders_scored"].sum())
-        assert m.suppressed == (scored < 20)
         if m.suppressed:
             continue
         assert (m.orders, m.alerts, m.closed_orders, m.late_observed, m.closed_alerts, m.alerts_late, m.cancelled_orders) == (
@@ -698,15 +722,16 @@ def test_alerts_months_modes_and_markets_are_the_follow_up_of_the_last_date(docs
         assert m.recall == approx(m.alerts_late / (m.alerts_late + int(part["late_missed"].sum())), 3)
         assert m.regime == ("post_break" if key >= 201710 else "pre_break")
     assert [b.mode for b in al.by_mode] == list(frames["dim_shipping_mode"].sort_values("sort_order")["mode_key"])
+    assert [b.suppressed for b in al.by_mode] == expected_hidden([int(track[track["mode_key"] == b.mode]["orders_scored"].sum()) for b in al.by_mode], 20)
     for b in al.by_mode:
         if not b.suppressed:
             assert b.orders == int(track[track["mode_key"] == b.mode]["orders_scored"].sum())
     order = frames["fact_order"]
     scored = order[order["risk"].notna()]
     geo = frames["dim_geo"].set_index("geo_key")["market"]
+    assert [b.suppressed for b in al.by_market] == expected_hidden([int((scored["geo_key"].map(geo) == b.market).sum()) for b in al.by_market], 20)
     for b in al.by_market:
         mine = scored[scored["geo_key"].map(geo) == b.market]
-        assert b.suppressed == (len(mine) < 20)
         if not b.suppressed:
             assert b.orders == len(mine) and b.alerts == int(mine["is_alert"].astype(bool).sum())
     assert sum(b.orders or 0 for b in al.by_market if not b.suppressed) <= len(scored)
@@ -760,7 +785,7 @@ def test_files_over_the_size_cap_are_not_written_and_the_old_ones_stay(star_expo
     assert [p.name for p in folder.iterdir()] == ["summary.json"] and (folder / "summary.json").read_text(encoding="utf-8") == '{"old": true}\n'
     total = sum((site / n).stat().st_size for n in SITE_FILES)
     export_site(star_export.conn, folder, META, replace(star_export.cfg, site=replace(star_export.cfg.site, max_total_bytes=total)))      # exactly at the cap: written
-    assert sorted(p.name for p in folder.iterdir()) == sorted(SITE_FILES)
+    assert sorted(p.name for p in folder.iterdir()) == sorted([*SITE_FILES, MANIFEST_FILE])      # the cap counts the five files the site publishes, not the manifest
 
 
 def test_the_summary_alone_is_rewritten_with_the_status_of_the_run_and_leaves_the_other_four(star_export, site, tmp_path):
@@ -775,6 +800,8 @@ def test_the_summary_alone_is_rewritten_with_the_status_of_the_run_and_leaves_th
     assert path == folder / "summary.json" and parse("summary.json", folder).status == "ok"
     after = {n: hashlib.sha256((folder / n).read_bytes()).hexdigest() for n in SITE_FILES}
     assert [n for n in SITE_FILES if before[n] != after[n]] == ["summary.json"]
+    manifest = json.loads((folder / MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert manifest["files"]["summary.json"]["sha256"] == after["summary.json"], "the manifest names the new summary"
     document = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
     document["status"] = "running"
     assert json.dumps(document, ensure_ascii=False, sort_keys=True, indent=1) + "\n" == (site / "summary.json").read_text(encoding="utf-8"), "only the status changed"

@@ -56,7 +56,7 @@ from latedel.launch import load_registered_model, m05_result
 from latedel.reporting import load_summary, write_summary
 from latedel.schema import SourceError
 from latedel.scoring import RunMeta, score_new_orders
-from latedel.site_export import export_site, export_summary
+from latedel.site_export import export_site, export_summary, verify_site
 from latedel.sysinfo import MemoryPeaks, peak_memory
 from latedel.tracking import track as track_follow_up
 from latedel.validate import (
@@ -548,6 +548,9 @@ def export(ctx: RunContext) -> dict:
         site = export_site(conn, cfg.paths.site_dir, meta, cfg)
     finally:
         conn.close()
+    unread = verify_site(cfg.paths.site_dir)   # read back like the star schema: the five files and the manifest written last are one export (D77)
+    if unread:
+        raise ExportError(f"los archivos del sitio no son una misma exportación: {'; '.join(unread)}")
     return {"files": [str(p) for p in paths], "site_files": [str(p) for p in site], "bytes": sum(p.stat().st_size for p in [*paths, *site])}
 
 

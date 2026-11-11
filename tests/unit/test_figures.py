@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 
@@ -12,6 +13,15 @@ from latedel import figures
 
 EXPECTED = ["split.png", "mode_rates.png", "noon_cutoff.png", "leakage.png", "methods.png", "cost_curve.png", "alerts.png"]
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def refresh_manifest(folder) -> None:
+    """The manifest of `folder` rewritten for the bytes its files hold now: a test that edits a site file by hand keeps the folder one export (D77)."""
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    for name in manifest["files"]:
+        data = (folder / name).read_bytes()
+        manifest["files"][name] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +68,7 @@ def test_a_figure_changes_when_its_data_change(fixture_site, written, tmp_path):
     document = json.loads((changed / "alerts.json").read_text(encoding="utf-8"))
     document["monthly"][-1]["alerts"] += 100
     (changed / "alerts.json").write_text(json.dumps(document), encoding="utf-8")
+    refresh_manifest(changed)
     original = written[2]                                                                 # the drawing of the unchanged files
     new = {p.name: p.read_bytes() for p in figures.make_figures(changed, tmp_path / "b")}
     assert {name for name in EXPECTED if original[name] != new[name]} == {"alerts.png"}

@@ -22,6 +22,7 @@ import pytest
 from latedel import pipeline
 from latedel.deliveries import delivery_plan, mark_status, publish, read_manifest
 from latedel.ingest import read_interim
+from latedel.site_export import verify_site
 from latedel.pipeline import CLOSING_STEPS, TASK_IDS, RunStateError, run_all, run_task
 from latedel.validate import ValidationError
 from tests.conftest import relocate
@@ -375,7 +376,11 @@ def content(config) -> dict[str, object]:
         frame = frame.drop(columns=[c for c in RUN_COLUMNS if c in frame.columns])
         found[path.name] = frame.sort_values(list(frame.columns), kind="stable").reset_index(drop=True).to_json()
     for path in sorted(config.paths.site_dir.glob("*.json")):
-        found[path.name] = json.dumps(without_run_fields(json.loads(path.read_text(encoding="utf-8"))), sort_keys=True)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if path.name == "manifest.json":   # its hashes are of bytes that carry the run key: the files it names, and that it names them, are what repeats
+            found[path.name] = (sorted(document["files"]), verify_site(config.paths.site_dir))
+            continue
+        found[path.name] = json.dumps(without_run_fields(document), sort_keys=True)
     return found
 
 
@@ -386,7 +391,7 @@ def test_two_replays_give_the_same_content_in_every_parquet_and_json(pipeline_tw
     assert len(replay(second, until=SECOND)) == 2
     first = make_cfg(pipeline_two_runs, fixture_csv)
     a, b = content(first), content(second)
-    assert a.keys() == b.keys() and len(a) >= 25   # 20 tables and 5 site files
+    assert a.keys() == b.keys() and len(a) >= 26   # 20 tables, 5 site files and the manifest
     assert [name for name in a if a[name] != b[name]] == []
     seals = [without_run_fields(json.loads(c.paths.seal.read_text(encoding="utf-8"))) for c in (first, second)]
     assert seals[0] == seals[1] and (first.paths.models_dir / "..").exists()

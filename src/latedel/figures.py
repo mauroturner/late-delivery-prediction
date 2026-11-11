@@ -22,6 +22,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 from latedel.files import atomic_path
+from latedel.site_export import SiteSetError, read_site
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +43,20 @@ KIND_LABELS = {"leak": "Delata el resultado", "precaution": "Precaución (se con
 
 
 def load_site(site_dir: Path) -> dict:
-    """``{"algorithms": ..., "alerts": ..., "leakage": ...}`` read from the site files of a run; a missing one is an error that says what to run."""
-    out = {}
-    for key, name in SITE_FILES.items():
+    """``{"algorithms": ..., "alerts": ..., "leakage": ...}`` read from the site files of a run; a missing one is an error that says what to run.
+
+    The files are read through ``site_export.read_site``: a folder whose files are not one export (one of them is not the file its ``manifest.json`` names, D77) is a
+    ``SiteSetError`` that says what to run, never figures drawn from two exports.
+    """
+    for name in SITE_FILES.values():
         path = Path(site_dir) / name
         if not path.is_file():
             raise FileNotFoundError(f"No existe {path}: corra el flujo (python -m latedel run) antes de dibujar las figuras")
-        out[key] = json.loads(path.read_text(encoding="utf-8"))
-    return out
+    try:
+        data = read_site(site_dir)
+    except SiteSetError as error:
+        raise SiteSetError(f"{error}. Corra el flujo (python -m latedel run) antes de dibujar las figuras") from None
+    return {key: json.loads(data[name].decode("utf-8")) for key, name in SITE_FILES.items()}
 
 
 # --- drawing helpers --------------------------------------------------------------------------------------------

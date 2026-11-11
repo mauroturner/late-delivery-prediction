@@ -12,7 +12,7 @@ import pytest
 
 from latedel.deliveries import delivery_plan, publish, read_delivery
 from latedel.export import ExportMeta, build_powerbi_marts
-from latedel.site_export import SITE_FILES, export_site
+from latedel.site_export import MANIFEST_FILE, SITE_FILES, export_site, verify_site
 from latedel.warehouse import connect, load_delivery, record_run
 
 pytestmark = pytest.mark.real_data
@@ -49,4 +49,11 @@ def test_the_whole_real_file_gives_five_small_files_with_the_real_counts_and_no_
     print("REAL SITE bytes", {p.name: p.stat().st_size for p in paths}, "total", sum(p.stat().st_size for p in paths))
     text = "".join(p.read_text(encoding="utf-8") for p in paths)
     assert '"order_id"' not in text
+    # H5 (D77): the five files and the manifest written last are one export; the hidden cells of the training block are counted (no result of the test is read)
+    assert verify_site(tmp_path / "site") == [] and (tmp_path / "site" / MANIFEST_FILE).stat().st_size < 2000
+    hidden = {name: sum(c["suppressed"] for c in algorithms[name]) for name in ("split", "mode_rates", "hour_profile")}
+    print("REAL SITE hidden cells", hidden, "manifest bytes", (tmp_path / "site" / MANIFEST_FILE).stat().st_size)
+    assert hidden["split"] == 0, "every block of the real file has hundreds of orders or more"
+    assert hidden["mode_rates"] == 4, "without a launch there are no registered rates: the four rows are empty, and that hides no count of the hours"
+    assert hidden["hour_profile"] == sum(c["train_orders"] is None and c["suppressed"] for c in algorithms["hour_profile"])
     conn.close()

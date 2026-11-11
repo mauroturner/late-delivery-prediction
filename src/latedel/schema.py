@@ -4,7 +4,7 @@ The 53 columns of ``DataCoSupplyChainDataset.csv`` are split into four lists tha
 
 - ``PERSONAL_COLUMNS`` (15): used only by the checks of the reader (V06, V07) and never written anywhere (D07);
 - ``LEAKING_COLUMNS`` (8): known only after the order was created; they go to the outcomes stream and nowhere else (D06);
-- ``DUPLICATE_OR_CONSTANT_COLUMNS`` (7): a copy of another column, a constant, an empty column or a URL; not carried;
+- ``DUPLICATE_OR_CONSTANT_COLUMNS`` (7): a copy of another column (``DUPLICATE_COLUMNS``, 4), or a constant, an empty column or a URL (``CONSTANT_COLUMNS``, 3); not carried;
 - ``ORDER_TIME_COLUMNS`` (23): what is known when the order is created; the allowed list of the orders and lines streams.
 
 ``SOURCE_TO_ORDER`` and ``SOURCE_TO_LINE`` give the internal name (English, snake case) of each column that reaches ``orders`` and ``order_lines``.
@@ -39,15 +39,21 @@ LEAKING_COLUMNS: tuple[str, ...] = (
     "Benefit per order", "Order Profit Per Order", "Order Item Profit Ratio",          # moment not established: kept out as a precaution
 )
 
-DUPLICATE_OR_CONSTANT_COLUMNS: tuple[str, ...] = (
+DUPLICATE_COLUMNS: tuple[str, ...] = (
     "Sales per customer",          # = Order Item Total
     "Order Item Product Price",    # = Product Price
     "Product Card Id",             # = Order Item Cardprod Id
     "Product Category Id",         # = Category Id
+)
+
+CONSTANT_COLUMNS: tuple[str, ...] = (
     "Product Status",              # constant 0
     "Product Description",         # empty
     "Product Image",               # a URL
 )
+
+# The two kinds by name (leakage.json says which is which): their order inside a list never decides what a column is (H5, R2-2).
+DUPLICATE_OR_CONSTANT_COLUMNS: tuple[str, ...] = DUPLICATE_COLUMNS + CONSTANT_COLUMNS
 
 ORDER_TIME_COLUMNS: tuple[str, ...] = (
     "Type", "Days for shipment (scheduled)", "Category Id", "Category Name", "Customer Country", "Customer Segment", "Department Id", "Department Name",
