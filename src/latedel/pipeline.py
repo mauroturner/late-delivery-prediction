@@ -10,8 +10,8 @@ Three rules keep the records honest (they come from the evaluations of projects 
   ``CLOSING_STEPS``: SQLite, the exported run table alone, the summary alone, the HTML, the manifest, and only then the state file says ``ok`` (decision D72). A process
   killed anywhere before the end leaves nothing a person reads that says ``ok`` while another file still says ``running``, and the same ``report`` run again finishes
   the close from any step. A task that fails after the load marks the run ``failed`` in SQLite and rewrites the files that exist.
-* A run that ended is not opened again, and a task whose delivery is not the last one loaded is refused before it writes anything (AC28). The refusals come first and write
-  nothing.
+* A run that ended is not opened again, a task whose delivery is not the last one loaded is refused before it writes anything (AC28), and so is ``load`` or a later task
+  on a delivery that this run did not load. The refusals come first and write nothing.
 
 And one process writes a data folder at a time (review of H8): ``run_task``, ``run_all`` and ``replay`` take the writer lock of the interim folder before their first
 write and keep it until they return, and a second process is refused before it writes anything (``RunLockedError``, decision D82; ``latedel.lock``).
@@ -605,10 +605,16 @@ def _run_peaks(ctx: RunContext) -> tuple[float | None, float | None]:
 
 
 def _close_sqlite(ctx: RunContext) -> None:
+    """Close the run's row of ``pipeline_runs``; the row is ``load``'s, so a run without one is an error and never gets a row here (B1 of the evaluation of ``eef9bea``)."""
     delivered = _task_result(ctx, "deliver")
     working, commit = _run_peaks(ctx)
     conn = connect(ctx.cfg.paths.warehouse)
     try:
+        if not conn.execute("SELECT 1 FROM pipeline_runs WHERE run_key = ?", (ctx.run_key,)).fetchone():
+            raise RunStateError(
+                f"La corrida {ctx.run_key} no tiene su fila en pipeline_runs: no cargó su entrega, así que no se cierra "
+                f"(python -m latedel run --run-key {ctx.run_key} --from validate)"
+            )
         scored, alerts = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(s.is_alert), 0) FROM model_scores s JOIN raw_orders o ON o.order_id = s.order_id WHERE o.delivery_id = ?", (delivered["delivery_id"],)
         ).fetchone()
@@ -800,6 +806,37 @@ def _refuse_an_older_date(spec: TaskSpec, ctx: RunContext) -> None:
         )
 
 
+def _refuse_a_delivery_this_run_did_not_load(spec: TaskSpec, ctx: RunContext) -> None:
+    """``load`` and the tasks after it work on the delivery the run holds, so the warehouse must say that this run loaded it (B1 of the evaluation of ``eef9bea``).
+
+    ``task export --run-key <a run that only delivered>`` rewrote the exports with that run's key and date, and the tasks of a run killed after ``validate``, whose delivery
+    another run loaded since, wrote over that run's records; ``report`` even created a row for the killed run in ``pipeline_runs``. ``load`` is refused when another run
+    loaded the delivery, and every task after it unless this run did. The refusal comes before anything is written.
+    """
+    if TASK_IDS.index(spec.task_id) < TASK_IDS.index("load"):
+        return
+    held = _read_state(ctx.state_path).get("tasks", {}).get("deliver", {})
+    if not held.get("delivered"):
+        return  # no delivery in this run: the task has its own error for that
+    conn = _read_only(ctx.cfg)
+    try:
+        owner = _loaded_by(conn, held["delivery_id"])
+    finally:
+        conn.close()
+    if owner == ctx.run_key or (owner is None and spec.task_id == "load"):
+        return
+    if owner is None:
+        raise RunRefusedError(
+            f"La corrida {ctx.run_key} tiene la entrega {held['delivery_id']}, pero no la cargó: la tarea {spec.task_id} trabaja sobre la entrega que cargó su corrida "
+            f"y no puede correr en esta. Valide y cargue primero la entrega (python -m latedel run --run-key {ctx.run_key} --from validate)"
+        )
+    raise RunRefusedError(
+        f"La corrida {ctx.run_key} tiene la entrega {held['delivery_id']}, pero la cargó la corrida {owner}: la tarea {spec.task_id} no puede correr en esta corrida. "
+        f"Lo que falte de esa entrega se corre en la corrida {owner} (python -m latedel run --run-key {owner} --from <tarea>); para la entrega siguiente, empiece otra "
+        "corrida (python -m latedel run)"
+    )
+
+
 def _record_failure(ctx: RunContext, spec: TaskSpec, error: BaseException) -> None:
     """Record a failed task: the state file, the row of SQLite and the files already exported.
 
@@ -830,12 +867,14 @@ def _run_spec(spec: TaskSpec, ctx: RunContext) -> dict:
     """Run one task after the refusals and save its result; a failure of the task or of the save of its result is recorded (D72, D79).
 
     The refusals come first and write nothing: a closed run (``ok`` or ``no_delivery``: a run that ended without a delivery is closed, so no task runs after it), a
-    second delivery, a model task of an older date. ``except BaseException`` is on purpose: an interruption (Ctrl+C, a scheduler that stops the process with an
-    exception) leaves the run unfinished, so it is recorded as ``failed`` like any failure, which keeps it open for a resume, and the interruption is raised again.
+    second delivery, a model task of an older date, and ``load`` or a later task on a delivery this run did not load. ``except BaseException`` is on purpose: an
+    interruption (Ctrl+C, a scheduler that stops the process with an exception) leaves the run unfinished, so it is recorded as ``failed`` like any failure, which keeps
+    it open for a resume, and the interruption is raised again.
     """
     _refuse_a_closed_run(spec, ctx)
     _refuse_a_second_delivery(spec, ctx)
     _refuse_an_older_date(spec, ctx)
+    _refuse_a_delivery_this_run_did_not_load(spec, ctx)
     started = time.perf_counter()
     logger.info("task %s start (run %s)", spec.task_id, ctx.run_key)
     _reopen(ctx)

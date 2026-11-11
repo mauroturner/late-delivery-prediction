@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from latedel import pipeline
+from latedel.cli import main as cli_main
 from latedel.deliveries import delivery_plan, mark_status, publish, read_manifest
 from latedel.ingest import read_interim
 from latedel.site_export import verify_site
@@ -602,6 +603,71 @@ def test_a_model_task_of_the_run_that_loaded_the_latest_delivery_still_runs(pipe
     config = relocate(pipeline_interrupted, tmp_path / "p", fixture_csv)
     tracked = run_task("track", "r1", config)
     assert tracked["as_of"] == "2017-01-07" and state(config, "r1")["tasks"]["track"]["as_of"] == "2017-01-07"
+
+
+# --- B1 of the evaluation of eef9bea: a task of a run that did not load the delivery it holds ------------------------------------------------------
+
+AFTER_LOAD = TASK_IDS[TASK_IDS.index("load") + 1 :]
+
+
+def run_keys(config) -> list[str]:
+    return [k for (k,) in rows(config, "SELECT run_key FROM pipeline_runs ORDER BY run_key")]
+
+
+def refused_cleanly(config, run_key: str, task_ids, needle: str, capsys) -> None:
+    """Each task of `task_ids` in the run `run_key` is refused before it writes anything: through ``run_task`` (``RunRefusedError``) and through the command line (exit 2,
+    no «falló», no traceback). Nothing changes: the warehouse, the exports, the HTML, the reports (the summaries and the validation reports), the manifest and the state
+    file of the run."""
+    path = config.paths.interim_dir / "runs" / f"{run_key}.json"
+    before, saved, keys = outputs(config), path.read_bytes(), run_keys(config)
+    everything = (snapshot(config.paths.reports_dir), snapshot(config.paths.raw_dir))
+    config_file = config.paths.interim_dir.parent / "config" / "test.toml"
+    for task_id in task_ids:
+        with pytest.raises(pipeline.RunRefusedError, match=needle) as refused:
+            run_task(task_id, run_key, config)
+        assert task_id in str(refused.value), task_id
+        assert cli_main(["task", task_id, "--config", str(config_file), "--run-key", run_key]) == 2, task_id
+        err = capsys.readouterr().err
+        assert "falló" not in err and "Traceback" not in err and run_key in err, task_id
+        assert outputs(config) == before and path.read_bytes() == saved and run_keys(config) == keys, task_id
+        assert (snapshot(config.paths.reports_dir), snapshot(config.paths.raw_dir)) == everything, task_id
+
+
+def test_tasks_of_a_run_whose_delivery_was_never_loaded_are_refused_before_they_write(pipeline_closed, fixture_csv, tmp_path, capsys):
+    """Repro 1 of B1: ``r2`` published M2017-01 and stopped there (``run --only fetch_source deliver``). ``task export --run-key r2`` rewrote the Parquet files with r2 and
+    M2017-01's date, ``render_dashboard`` wrote an HTML naming r2 although the last loaded date is the launch's, and ``report`` created a row for r2 in pipeline_runs with no
+    delivery and then crashed with a ``TypeError``. Every task after ``load`` is refused with exit 2 and nothing is written."""
+    config = relocate(pipeline_closed, tmp_path / "p", fixture_csv)
+    run_all(config, only=["fetch_source", "deliver"], run_key="r2")
+    refused_cleanly(config, "r2", AFTER_LOAD, rf"r2.*{SECOND}", capsys)
+    assert run_keys(config) == ["r1"] and state(config, "r2")["status"] == "running"
+
+
+def killed_after_validate(config, source: str, run_key: str) -> None:
+    """The state file a process killed right after ``validate`` leaves: the run holds the delivery of `source` (a run that loaded it since) and was never loaded."""
+    tasks = state(config, source)["tasks"]
+    left = {"run_key": run_key, "started_at": "2026-11-11T10:00:00+00:00", "status": "running", "tasks": {t: tasks[t] for t in ("fetch_source", "deliver", "validate")}}
+    (config.paths.interim_dir / "runs" / f"{run_key}.json").write_text(json.dumps(left, indent=2) + "\n", encoding="utf-8")
+
+
+def test_tasks_of_a_run_whose_delivery_another_run_loaded_are_refused_before_they_write(pipeline_two_runs, fixture_csv, tmp_path, capsys):
+    """Repro 2 of B1 (the path of runbook R9): a replay killed after ``validate`` of M2017-01, then a new run ``r2`` that loaded M2017-01 and closed. ``fit_model``,
+    ``score``, ``track``, ``evaluate``, ``export`` and ``render_dashboard`` with the killed run's key exited 0 and wrote over r2's records, and ``report`` crashed after
+    creating a ``failed`` row for the killed run. ``load`` and every task after it are refused, with the run that loaded the delivery named."""
+    config = relocate(pipeline_two_runs, tmp_path / "p", fixture_csv)
+    killed_after_validate(config, "r2", "killed")
+    refused_cleanly(config, "killed", ("load", *AFTER_LOAD), rf"killed.*{SECOND}.*r2", capsys)
+    assert run_keys(config) == ["r1", "r2"] and run_row(config, "r2")[0] == "ok"
+
+
+def test_closing_a_run_never_creates_its_row_in_the_warehouse(pipeline_two_runs, fixture_csv, tmp_path):
+    """``_close_sqlite`` wrote the run's row with an upsert, so a run with no row (it never loaded) got one, with no delivery, that the next close step crashed on."""
+    config = relocate(pipeline_two_runs, tmp_path / "p", fixture_csv)
+    killed_after_validate(config, "r2", "ghost")
+    ctx = pipeline.RunContext(config, "ghost", pd.Timestamp("2026-11-11T10:00:00Z").to_pydatetime(), config.paths.interim_dir / "runs" / "ghost.json")
+    with pytest.raises(RunStateError, match="ghost.*pipeline_runs"):
+        pipeline._close_sqlite(ctx)
+    assert run_keys(config) == ["r1", "r2"]
 
 
 # --- AC27: the failure handler's own writes do not replace the task's error ------------------------------------------------------------------
