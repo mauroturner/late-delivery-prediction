@@ -382,3 +382,38 @@ def test_the_help_of_every_command_names_its_options_in_spanish(capsys):
         text = sub.format_help()
         assert "python -m latedel" in text and re.search(r"[áéíóú]|[a-z]+ los |corrida|archivo|tarea|entrega|pedidos|resumen", text), name
     assert main(capsys, "--help")[0] == 0
+
+
+# --- A2 and A4 of the evaluation of eef9bea (decision D90) ----------------------------------------------------------------------------------------------------
+
+
+def test_a_relative_latedel_config_is_taken_from_the_project_folder_not_from_the_working_directory(project, capsys, tmp_path, monkeypatch):
+    """A2: ``LATEDEL_CONFIG=config/pipeline.quick.toml`` was resolved against the working directory, so run from another copy's folder it silently drove that copy's
+    ``data/quick``. A relative ``LATEDEL_CONFIG`` is taken from the project folder (``LATEDEL_HOME`` when it is set), as ``--config`` and every relative path of the
+    configuration are (D24)."""
+    root, config = project
+    other = tmp_path / "elsewhere"
+    relocate(root, other, Path(load_config(config).source.local_path))
+    monkeypatch.chdir(other)                                   # the working directory has a config/test.toml of its own: it must not be the one used
+    monkeypatch.delenv("LATEDEL_HOME", raising=False)
+    monkeypatch.setenv("LATEDEL_CONFIG", "config/test.toml")
+    before_root, before_other = snapshot(root), snapshot(other)
+    code, _out, err = main(capsys, "run", "--only", "fetch_source", "deliver", "--run-key", "relative")
+    assert code == 2 and str(cli.DEFAULT_PROJECT_ROOT / "config" / "test.toml") in err   # the project's own config folder, which has no such file
+    assert snapshot(other) == before_other and snapshot(root) == before_root
+    monkeypatch.setenv("LATEDEL_HOME", str(root))              # with LATEDEL_HOME, the file is taken from that folder
+    assert main(capsys, "run", "--only", "fetch_source", "deliver", "--run-key", "relative")[0] == 0
+    assert snapshot(other) == before_other and snapshot(root) != before_root
+
+
+def test_docs_sync_with_a_configuration_without_a_readme_says_why_and_writes_nothing(project, capsys):
+    """A4: ``docs-sync --config config/pipeline.quick.toml`` always exited 2 with the bare «[Errno 2] No such file or directory» of ``data/quick/README.md``. It still
+    exits 2, before writing anything, and says that the configuration's README does not exist (the quick mode has none) and where the summary is."""
+    root, config = project
+    (root / "reports").mkdir()
+    (root / "reports" / "evaluation_summary.md").write_text("| C01 | cumple |\n", encoding="utf-8")
+    before = snapshot(root)
+    code, out, err = main(capsys, "docs-sync", "--config", config)
+    assert code == 2 and out == "" and "Errno" not in err
+    assert "README" in err and "no existe" in err and "modo rápido" in err and "evaluation_summary.md" in err
+    assert snapshot(root) == before

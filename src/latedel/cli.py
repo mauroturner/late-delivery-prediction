@@ -132,6 +132,11 @@ def _execute(args: argparse.Namespace, cfg) -> int:
         summary = Path(cfg.paths.reports_dir) / SUMMARY_MD
         if not summary.is_file():
             raise FileNotFoundError(f"No existe {summary}: corra la tarea report antes de docs-sync")
+        if not Path(cfg.paths.readme).is_file():   # the quick mode has no README of its own (A4 of the evaluation of eef9bea)
+            raise UsageError(
+                f"docs-sync copia el resumen de resultados en el README de la configuración, {cfg.paths.readme}, y ese archivo no existe: el modo rápido no tiene "
+                f"README, y su resumen queda en {summary}. No se escribió nada."
+            )
         changed = sync_results(cfg.paths.readme, summary)
         _say(f"{cfg.paths.readme.name} actualizado" if changed else f"{cfg.paths.readme.name} ya estaba al día")
         from latedel.dashboard.semantic_model import MODEL

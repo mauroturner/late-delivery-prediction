@@ -4,7 +4,8 @@
 ``extends = "<path>"`` (``config/pipeline.quick.toml`` does). Every relative path in the configuration
 (``[paths]`` and ``source.local_path``) is resolved against the project folder, never against the working
 directory (decision D24): ``$LATEDEL_HOME`` when it is set, otherwise the parent of the folder that holds the
-main configuration file.
+main configuration file. A relative ``$LATEDEL_CONFIG`` is taken from the project folder too: ``$LATEDEL_HOME`` when
+it is set, otherwise the folder of this package's project (A2 of the evaluation of ``eef9bea``, decision D90).
 
 Anything unknown, missing, mistyped or inconsistent is a ``ValueError`` that names the key. That includes a key the
 chosen ``source.mode`` would ignore: an option that is accepted and silently not used is the defect that projects 01 and
@@ -505,11 +506,14 @@ def load_config(path: Path | None = None) -> PipelineConfig:
 
     `path` is the main file; without it, ``$LATEDEL_CONFIG`` and then ``config/pipeline.toml`` of the
     project. Relative paths are resolved against the project folder, so the result does not depend on the
-    working directory. Anything unknown, missing, mistyped or inconsistent is a ``ValueError`` naming the key.
+    working directory; that includes a relative ``$LATEDEL_CONFIG``, taken from ``$LATEDEL_HOME`` or, without it,
+    from this package's project. Anything unknown, missing, mistyped or inconsistent is a ``ValueError`` naming the key.
     """
     if path is None:
         env = os.environ.get(ENV_CONFIG)
         path = Path(env) if env else DEFAULT_CONFIG
+        if not path.is_absolute():   # the working directory may be another copy's folder: never read its configuration in silence
+            path = Path(os.environ.get(ENV_HOME) or DEFAULT_PROJECT_ROOT) / path
     path = Path(path)
     data = _read_toml(path)
     root = _project_root(path)
