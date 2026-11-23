@@ -1,6 +1,6 @@
 """The documentation is checked like code (AC23, AC35; plan sections 21 and 22).
 
-U26: the README has the headings of the plan in their order and its results block is the summary the sealed run wrote, never a copy by hand; the README and the model
+U26: the README has the headings of the numbered outline (ESTRUCTURA-PROYECTOS.md, at the portfolio's root) in their order and its results block is the summary the sealed run wrote, never a copy by hand; the README and the model
 card say the unfavourable verdicts (C03 and C05) as the summary does, and the model card has the contents the plan lists. These tests read the versioned Markdown and the
 versioned reports (``reports/`` holds the outputs of U25) and run nothing, so they cost the suite a few milliseconds.
 
@@ -24,10 +24,23 @@ import pytest
 from latedel.reporting import RESULTS_END, RESULTS_START, read_block
 
 README_TITLE = "# Pedidos que van a llegar tarde, antes de que lleguen"
-README_HEADINGS = [   # plan, section 22, in this order (AC35)
-    "El problema", "La solución", "Los resultados", "En qué consiste", "Los datos", "Los algoritmos", "El producto", "La documentación", "Con IA, de punta a punta",
-    "Para qué sirve", "Cómo correrlo de punta a punta", "Paso a paso", "Fuente y licencia",
+README_HEADINGS = [   # the numbered outline of the portfolio's ESTRUCTURA-PROYECTOS.md, then the appendices (AC35)
+    "1. Resumen ejecutivo", "2. Datasets y preparación", "3. Arquitectura y metodología", "4. Producto final", "5. Conclusión",
+    "Resultados completos de la corrida", "Cómo correrlo de punta a punta", "Paso a paso", "Fuente y licencia",
 ]
+README_SUBSECTIONS = [
+    "1.1 Problema de negocio y solución", "1.2 Criterios de éxito e impacto",
+    "2.1 Fuentes, alcance y granularidad", "2.2 Saneamiento y reglas de calidad",
+    "3.1 Fuente e ingesta", "3.2 Orquestación y transformación", "3.3 Almacenamiento y modelado de datos",
+    "3.4 Experimentación y Machine Learning", "3.5 Consumo y gobernanza",
+    "4.1 Entregables operativos", "4.2 Lectura de resultados actuales",
+    "5.1 Evaluación frente a criterios de éxito", "5.2 Limitaciones metodológicas", "5.3 Trabajo futuro",
+]
+README_ML_SUBSECTIONS = [
+    "3.4.1 Ingeniería de características y línea base (baseline)", "3.4.2 Decisiones de modelado y ablación (ADR)",
+    "3.4.3 Protocolo de validación (backtesting / cross-validation)",
+]
+READING = ("### 5.1 Evaluación frente a criterios de éxito", "### 5.2 Limitaciones metodológicas")   # where the README reads the results
 MODEL_CARD_HEADINGS = [   # what plan section 22 lists for the model card, in this order
     "Uso previsto y no previsto", "Datos", "Momento de la predicción", "Variables", "Partición", "Métodos", "Calibración", "Umbral y costos supuestos",
     "Criterios y resultados", "Rendimiento", "Limitaciones", "Reproducibilidad",
@@ -56,14 +69,18 @@ def failed_criteria(summary: dict) -> list[dict]:
 def test_readme_headings_in_order_and_results_block_matches_summary(project_root: Path, readme: str, summary: dict) -> None:
     assert readme.startswith(README_TITLE + "\n")
     assert re.findall(r"^## (.+)$", readme, flags=re.MULTILINE) == README_HEADINGS
+    assert re.findall(r"^### (\d.+)$", readme, flags=re.MULTILINE) == README_SUBSECTIONS
+    assert re.findall(r"^#### (\d.+)$", readme, flags=re.MULTILINE) == README_ML_SUBSECTIONS
     assert readme.count(RESULTS_START) == 1 and readme.count(RESULTS_END) == 1
     block = read_block(project_root / "README.md")
     assert block == (project_root / "reports" / "evaluation_summary.md").read_text(encoding="utf-8").strip("\n")   # what docs-sync copies, byte for byte
-    assert readme.index(RESULTS_START) > readme.index("## Los resultados") and readme.index(RESULTS_END) < readme.index("## En qué consiste")
-    # AC23: the summary is unfavourable on two criteria, and the README says «no supera» for each, with its number, outside the block too
+    # the generated block is an appendix: after the five sections, before the commands
+    assert readme.index(RESULTS_START) > readme.index("## Resultados completos de la corrida") and readme.index(RESULTS_END) < readme.index("## Cómo correrlo de punta a punta")
+    # AC23: the summary is unfavourable on two criteria, and the README says «no supera» for each, with its number, outside the block too (in 5.1)
     failed = failed_criteria(summary)
     assert [c["id"] for c in failed] == summary["failed"] == ["C03", "C05"]
-    reading = readme.split(RESULTS_END)[1].split("## En qué consiste")[0]
+    reading = readme.split(READING[0])[1].split(READING[1])[0]
+    assert RESULTS_START not in reading
     for criterion in failed:
         assert criterion["verdict_es"] in block and "no supera" in criterion["verdict_es"]
         assert re.search(rf"\b{criterion['id']}\b[^\n]*no supera|no supera[^\n]*\b{criterion['id']}\b", reading), criterion["id"]
@@ -87,6 +104,9 @@ def test_the_readme_says_what_is_not_done_and_gives_the_attribution(readme: str)
     the source is complete; no private address is published."""
     text = readme.lower()
     assert "evaluación independiente" in text and "todavía no" in text and ".pbix" in text
+    # S104 (f) of the site: no section about AI and no agent or model credited (a new test would change the stated count of the suite)
+    assert "Con IA, de punta a punta" not in readme
+    assert not re.search(r"\bagentes?\b|\b(?:Haiku|Opus|Sonnet)\b|Gentle AI|\bIA\b", readme)
     tail = readme.split("## Fuente y licencia")[1]
     for piece in ("Constante, Fabian; Silva, Fernando; Pereira, António (2019)", "DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS", "Mendeley Data, v5",
                   "http://doi.org/10.17632/8gx2fvg2k6.5", "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"):
