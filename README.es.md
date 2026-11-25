@@ -331,3 +331,5 @@ El proyecto se construyó en 27 unidades de trabajo más nueve de endurecimiento
 Fuente de datos: Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5, licencia CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modificaciones: se descartaron las 15 columnas personales al leer el archivo, se apartaron las columnas que delatan el resultado a un flujo propio, se agregaron las líneas por pedido, se repartió la historia en entregas mensuales y se calcularon riesgos, alertas, métricas y criterios.
 
 Los datos crudos no se versionan: el flujo descarga el archivo y verifica su huella. Ninguna salida lleva un dato personal; el número de pedido de la fuente está en los Parquet del tablero y en ningún archivo del sitio.
+
+El código está bajo la [licencia MIT](LICENSE); los datos de origen conservan la licencia indicada arriba.

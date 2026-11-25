@@ -346,3 +346,5 @@ Every operation, with its failures and how to recover, is in the [runbook](docs/
 Data source: Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: the 15 personal columns dropped on reading, the columns that give the result away moved to a flow of their own, lines added up per order, the history split into monthly deliveries, and risks, alerts, metrics and criteria calculated.
 
 The raw data is not versioned: the flow downloads the file and checks its hash. No output carries personal data.
+
+The code is under the [MIT licence](LICENSE); the source data keeps the licence given above.
