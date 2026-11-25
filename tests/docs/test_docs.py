@@ -23,7 +23,7 @@ import pytest
 
 from latedel.reporting import RESULTS_END, RESULTS_START, read_block
 
-README_TITLE = "# Pedidos que van a llegar tarde, antes de que lleguen"
+README_TITLE = "# Gradient boosting calibrado para la predicción de entregas tardías"
 README_HEADINGS = [   # the numbered outline of the portfolio's ESTRUCTURA-PROYECTOS.md, then the appendices (AC35)
     "1. Resumen ejecutivo", "2. Datasets y preparación", "3. Arquitectura y metodología", "4. Producto final", "5. Conclusión",
     "Resultados completos de la corrida", "Cómo correrlo de punta a punta", "Paso a paso", "Fuente y licencia",
