@@ -47,9 +47,17 @@ MODEL_CARD_HEADINGS = [   # what plan section 22 lists for the model card, in th
 ]
 
 
+def root_document(project_root: Path, name: str) -> str:
+    """A document at the portfolio's root. The project is also published on its own repository, where the test that reads it is skipped."""
+    path = project_root.parent / name
+    if not path.is_file():
+        pytest.skip(f"{name} is at the root of the portfolio, which is not here")
+    return path.read_text(encoding="utf-8")
+
+
 @pytest.fixture(scope="module")
 def readme(project_root: Path) -> str:
-    return (project_root / "README.md").read_text(encoding="utf-8")
+    return (project_root / "README.es.md").read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -67,12 +75,13 @@ def failed_criteria(summary: dict) -> list[dict]:
 
 
 def test_readme_headings_in_order_and_results_block_matches_summary(project_root: Path, readme: str, summary: dict) -> None:
+    check_the_english_readme(project_root, readme)
     assert readme.startswith(README_TITLE + "\n")
     assert re.findall(r"^## (.+)$", readme, flags=re.MULTILINE) == README_HEADINGS
     assert re.findall(r"^### (\d.+)$", readme, flags=re.MULTILINE) == README_SUBSECTIONS
     assert re.findall(r"^#### (\d.+)$", readme, flags=re.MULTILINE) == README_ML_SUBSECTIONS
     assert readme.count(RESULTS_START) == 1 and readme.count(RESULTS_END) == 1
-    block = read_block(project_root / "README.md")
+    block = read_block(project_root / "README.es.md")
     assert block == (project_root / "reports" / "evaluation_summary.md").read_text(encoding="utf-8").strip("\n")   # what docs-sync copies, byte for byte
     # the generated block is an appendix: after the five sections, before the commands
     assert readme.index(RESULTS_START) > readme.index("## Resultados completos de la corrida") and readme.index(RESULTS_END) < readme.index("## Cómo correrlo de punta a punta")
@@ -134,7 +143,7 @@ def read(project_root: Path, name: str) -> str:
 
 def root_rows(project_root: Path) -> str:
     """The section of project 03 in the root ``SITE-UPDATES.md``, up to the next project or the end."""
-    text = (project_root.parent / "SITE-UPDATES.md").read_text(encoding="utf-8")
+    text = root_document(project_root, "SITE-UPDATES.md")
     assert text.count("\n## 03 ") == 1
     return re.split(r"\n## 0\d ", text.split("\n## 03 ")[1])[0]
 
@@ -298,7 +307,7 @@ def test_the_step_by_step_names_every_unit_and_cites_commits_that_exist(project_
 
 def test_relative_links_and_images_point_to_files_that_exist(project_root: Path) -> None:
     broken = []
-    for document in [project_root / "README.md", *sorted((project_root / "docs").glob("*.md"))]:
+    for document in [project_root / "README.md", project_root / "README.es.md", *sorted((project_root / "docs").glob("*.md"))]:
         text = document.read_text(encoding="utf-8")
         for target in [*LINK.findall(text), *IMAGE.findall(text)]:
             if not re.match(r"^(https?:|mailto:)", target) and not (document.parent / target).resolve().exists():
@@ -313,7 +322,7 @@ def test_the_root_rows_of_project_03_carry_the_real_figures(project_root: Path) 
     for figure in ("180.519", "65.752", "62.897", "14.527", "0,773", "0,742", "0,774", "1.459,4", "1.467,3", "1.323,1", "0,66", "105,14 s", "921,6 MB", "2.824,1 MB"):
         assert figure in rows, figure
     assert rows.count("no supera") >= 2 and "C03" in rows and "C05" in rows and "@gmail" not in rows
-    expansion = (project_root.parent / "LANDING-EXPANSION.md").read_text(encoding="utf-8")
+    expansion = root_document(project_root, "LANDING-EXPANSION.md")
     marked = {line.split("|")[1].strip() for line in expansion.splitlines() if line.startswith("| ") and "03 Pedidos que llegan tarde" in line}
     assert marked == {"NumPy", "SciPy", "SQLite", "Apache Parquet con pyarrow", "matplotlib", "pytest", "PostgreSQL"}   # D27: the ones this project uses (SciPy too, B6), and no new row
 
@@ -342,3 +351,12 @@ def test_open_advisories_match_review_file(project_root: Path, readme: str) -> N
     opened = sorted(ident for (_title, ident), resolution in found.items() if resolution.startswith("abierta"))
     [stated] = re.findall(r"^Advertencias abiertas: (.+)$", readme, flags=re.MULTILINE)
     assert (sorted(re.findall(r"`([^`]+)`", stated.split(" (")[0])) or ["ninguna"]) == (opened or ["ninguna"]), stated
+
+
+def check_the_english_readme(project_root: Path, readme: str) -> None:
+    """README.md is the page of the project in English; README.es.md is the full one, which ``docs-sync`` and the other tests check."""
+    english = (project_root / "README.md").read_text(encoding="utf-8")
+    assert "**English** · [Español](README.es.md)" in english and "[English](README.md) · **Español**" in readme
+    assert english.count("7 of 9 success criteria met") == 2 and "undefined" not in english and "@gmail" not in english
+    for target in ("docs/screenshots/dashboard.png", "docs/screenshots/demo.png", "docs/model-card.md", "docs/evaluation.md"):
+        assert f"]({target})" in english and (project_root / target).is_file(), target

@@ -1,331 +1,348 @@
-# Pedidos que van a llegar tarde, antes de que lleguen
+# Orders that will arrive late, before they do
 
-| | |
+**English** · [Español](README.es.md)
+
+Alerts for orders that will arrive late, computed when each order is created.
+
+![Late-delivery risk explorer](docs/screenshots/dashboard.png)
+
+|  |  |
 | --- | --- |
-| **Propuesta de valor** | Una alerta, calculada al crear cada pedido, para los pedidos que van a llegar tarde, con su probabilidad calibrada y la medición de cuánto agrega el modelo frente a dos reglas simples |
-| **Stack tecnológico** | Python 3.11, pandas, NumPy, SciPy, scikit-learn, SQLite y SQL, Parquet (PyArrow), Matplotlib, pytest, Apache Airflow sobre Docker Compose, y el diseño de un tablero de Power BI en HTML con medidas DAX |
-| **Técnicas** | Clasificación con gradient boosting, calibración isotónica, umbral por beneficio neto con costos supuestos, partición en el tiempo con purgas, líneas base B0-B5, remuestreo pareado, importancia por permutación |
-| **Para auditar** | [Ficha del modelo](docs/model-card.md) · [Evaluación independiente](docs/evaluation.md) · [Última corrida: validación](reports/validation/latest.md) · [Última corrida: resultados](reports/evaluation_summary.md) · [Sello de la prueba](reports/model_seal.json) |
+| **Result** | 7 of 9 success criteria met |
+| **Tech stack** | Python, pandas, NumPy, SciPy, scikit-learn, SQLite, Parquet, Apache Airflow, Docker |
+| **Techniques** | Binary classification, Gradient boosting, Isotonic calibration, Cost-based threshold, Time split with purges, Paired resampling |
+| **To audit** (in Spanish) | [Model card](docs/model-card.md) · [Independent evaluation](docs/evaluation.md) · [Latest run: validation](reports/validation/latest.md) · [Latest run: results](reports/evaluation_summary.md) · [Decision log](docs/decisions.md) · [Test seal](reports/model_seal.json) |
 
-Este README sigue la estructura común de los proyectos de datos del portafolio, descrita en `ESTRUCTURA-PROYECTOS.md` en la raíz del portafolio.
+## 1. Executive summary
 
-## 1. Resumen ejecutivo
+### 1.1 Business problem and solution
 
-### 1.1 Problema de negocio y solución
+**Business problem and target audience.** Built for the logistics operations teams of a company that ships worldwide and promises a delivery date on every order: today the delay only shows when the customer complains. The system estimates, at the moment each order is created and only from what is known then, the probability that it arrives late, to decide which orders to check, bring forward or move to another shipping mode. It was built on the 65,752 orders of a simulated supply chain, published under an open licence.
 
-Un flujo mensual que toma los pedidos de una empresa que vende en línea y despacha a todo el mundo, los valida, descarta los datos personales al leerlos, estima para cada pedido nuevo, con lo que se sabe al crearlo, la probabilidad calibrada de que llegue tarde, marca los que pasan un umbral elegido por costo y sigue mes a mes cómo resultan esas alertas. Y mide, contra criterios fijados antes de escribir el código, si el modelo supera a dos reglas simples: supera a la primera y no a la segunda.
+**Proposed solution.** A monthly flow that checks each delivery of orders against 33 rules, scores every new order with a calibrated, frozen classifier, and leaves three outputs:
 
-**El problema.**
+- **Calibrated risk:** a probability of arriving late that can be read as such, with a calibration error of 0.016 on the test.
+- **Alert:** the order whose risk reaches the threshold chosen by cost, 0.66 with the assumed costs.
+- **Follow-up:** each month, how many of the alerts that have closed arrived late.
 
-Una empresa que despacha a todo el mundo promete una fecha de entrega en cada pedido, pero la demora aparece recién cuando ya pasó: el cliente reclama y nadie lo había visto venir. Logística no sabe qué pedidos revisar, adelantar o cambiar de modo de envío; atención al cliente recibe el reclamo sin aviso; dirección no sabe cuánto cuesta una alerta frente a cuánto cuesta un retraso, ni si un modelo agrega algo a una regla que cualquiera puede escribir.
+### 1.2 Success criteria and impact
 
-El dato de este proyecto es el de una cadena de suministro simulada, «DataCo SMART SUPPLY CHAIN», publicado en Mendeley Data (CC BY 4.0): 180.519 líneas de 65.752 pedidos del 2015-01-01 al 2018-01-31, en las que el 57,3 % de los pedidos no cancelados llega tarde. Trae una trampa conocida: los trabajos publicados sobre este conjunto informan un AUC de hasta 0,89 con columnas que solo existen después del envío, y una de ellas, `Delivery Status`, es la respuesta escrita con otras palabras. Un equipo que copiara ese modelo pondría en uso un clasificador que conoce el resultado recién cuando el pedido ya llegó.
+**Criteria set before measuring.** Before the code was written, ten criteria were fixed, nine with a threshold: the model had to beat the late rate by shipping mode (B2) and that same rate split by the hour of the order (B5) on AUC, beyond the noise and on net benefit, and to be calibrated, with a calibration error of 0.03 at most. The expectation was written next to them: that it would beat B2 and not B5.
 
-**La solución.**
+**Impact and main result.** On the test, 14,527 orders evaluated only once, the model ranks better than the rule by mode (AUC 0.773 against 0.742) and does not beat the two-variable rule (0.773 against 0.774): it meets 7 of the 9 criteria with a threshold and misses the two that compare it with B5. At the threshold chosen by cost it flags 37.1 % of the orders, and 89.4 % of those alerts arrived late.
 
-Un flujo mensual que, con cada entrega de pedidos nuevos y de resultados ya conocidos, la valida con 33 reglas (18 bloquean la entrega, 6 advierten y 9 informan), descarta las 15 columnas personales antes de escribir nada, carga la entrega en SQLite de forma todo o nada, puntúa cada pedido nuevo con un clasificador de árboles entrenado y congelado en el lanzamiento, marca los que superan un umbral elegido por beneficio neto con costos supuestos y declarados, sigue cada mes las alertas que ya cerraron y escribe las tablas de un tablero de Power BI en modelo estrella, el diseño del tablero en HTML y cinco archivos pequeños para el sitio. Si una entrega está dañada, la rechaza y deja todo lo anterior intacto, byte a byte.
+![Late-delivery risk explorer: the product](docs/screenshots/demo.png)
 
-El resultado central no es el modelo sino una medición: el clasificador se compara con la tasa de retraso por modo de envío (B2) y con esa misma tasa partida por la hora del pedido (B5), con diez criterios fijados antes de escribir el código. La prueba se evaluó una sola vez y quedó sellada.
+## 2. Datasets and preparation
 
-**Para qué sirve.**
+### 2.1 Sources, scope and granularity
 
-- **Un equipo de logística** obtiene cada mes la lista de pedidos nuevos con su riesgo calibrado y una alerta en los que conviene mirar antes, con lo que se sabe al crearlos, y el seguimiento de cuántas alertas acertaron.
-- **Quien decida con el modelo sabe cuánto confiar en él:** supera a la regla por modo y está calibrado, pero una regla de dos variables (modo y franja horaria del pedido) rinde lo mismo. Si se quiere algo simple y auditable, esa regla alcanza; el flujo, el seguimiento y el tablero sirven igual con ella.
-- **Dirección** ve cuánto cambia la decisión si cambian los costos de una alerta y de un retraso, en lugar de un umbral fijo de 0,5.
-- **Una entrega nueva sin trabajo manual:** el flujo la valida, la carga, la puntúa y sigue las alertas; si el archivo cambia de forma o se daña, la rechaza sin tocar lo anterior.
-- **Para un tablero:** las tablas en estrella y el diseño en HTML dicen cómo armar las cinco páginas en Power BI Desktop.
+- DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS. Fabian Constante, Fernando Silva and António Pereira (2019), on Mendeley Data, version 5, doi.org/10.17632/8gx2fvg2k6.5. https://doi.org/10.17632/8gx2fvg2k6.5 (CC BY 4.0)
 
-Lo que no sirve: predecir al despachar (la columna de despacho ya contiene la demora), poner un costo real a una alerta o a un retraso (los datos no lo traen), decir por qué un pedido se demora más allá del modo y la hora, ni reemplazar una evaluación con datos reales de otra empresa: los días reales son casi uniformes dentro de cada modo y el corte del mediodía no tiene excepciones, dos rasgos que hacen pensar que los datos son generados.
-
-### 1.2 Criterios de éxito e impacto
-
-Los criterios C01 a C10 se fijaron y se confirmaron en Git antes del primer código (`docs/requirements.md`, sección 8.1; `docs/decisions.md`, D16), sin calcular ninguna métrica en la validación ni en la prueba, junto con lo que se esperaba: que el modelo superara a B2 y no a B5, porque C03 y C05 probablemente no se cumplirían. Nueve tienen umbral (discriminación, mejora fuera del ruido, beneficio neto, calibración, Brier, alertas a igual número y sensibilidad a los costos) y C10, el tramo posterior al cambio de forma, es informativo.
-
-**Así salió: el modelo supera 7 de los 9 criterios con umbral y no supera C03 ni C05, los dos que lo comparan con la regla de dos variables.** En la prueba, AUC 0,773 del modelo frente a 0,742 de B2 y 0,774 de B5; con el umbral elegido por costo marca el 37,1 % de los pedidos con una precisión de 0,894. Cada criterio contra su resultado, en [5.1](#51-evaluación-frente-a-criterios-de-éxito); el bloque completo, en [Resultados completos de la corrida](#resultados-completos-de-la-corrida).
-
-## 2. Datasets y preparación
-
-### 2.1 Fuentes, alcance y granularidad
-
-| | |
+| Attribute | Specification |
 | --- | --- |
-| Fuente | Mendeley Data, «DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS», versión 5, de Constante, Silva y Pereira (http://doi.org/10.17632/8gx2fvg2k6.5) |
-| Archivo | `DataCoSupplyChainDataset.csv`, 95.910.149 bytes, cp1252 con CRLF, 53 columnas; el archivo de registros de navegación del mismo conjunto no se usa (trae señales posteriores al pedido) |
-| Período | Pedidos del 2015-01-01 al 2018-01-31 |
-| Filas | 180.519 líneas de 65.752 pedidos; la unidad del modelo es el pedido, no la línea |
-| Cancelados | 2.855 pedidos completos (7.754 líneas) quedan fuera de la tarea: se puntúan como cualquier pedido nuevo y se cuentan; quedan 62.897 pedidos para la tarea |
-| Etiqueta | Un pedido no cancelado llega tarde si sus días reales superan a los programados: 36.048 de 62.897 (57,3 %) |
-| Fuga | `Days for shipping (real)`, `Delivery Status` y `shipping date` delatan el resultado, y `Order Status` no se conoce al crear el pedido; las tres de rentabilidad se excluyen por precaución. Todas quedan en un flujo de resultados aparte, detrás de cuatro guardas |
-| Datos personales | 15 columnas (nombres, correo, contraseña, calle, códigos postales, ciudades y estados, identificadores del cliente, latitud y longitud) se descartan en la lectura y no llegan a ningún archivo |
-| Cambio de forma | Desde 2017-10 cada pedido tiene una línea (8.340 de 8.403 pedidos) en lugar de una a cinco: ese tramo se informa aparte |
+| Original volume (M × N) | 180,519 rows × 53 columns (a single CSV of 95,910,149 bytes, cp1252 with CRLF) |
+| Unit of analysis | The order, not the line: 65,752 orders, each with its lines aggregated |
+| Period covered | Orders from 1 January 2015 to 31 January 2018 |
+| Scope of the task | 62,897 orders not cancelled, of which 36,048 (57.3 %) arrived late |
+| Selected variables | 28 of 53 columns, with the outcome ones in a separate stream that never reaches the model |
 
-Cada columna de la fuente, con su destino, y cada columna de cada tabla exportada, con su unidad, están en [docs/data-dictionary.md](docs/data-dictionary.md).
+<details>
+<summary>Fields available in the dataset (28)</summary>
 
-La atribución y la licencia están al final, en [Fuente y licencia](#fuente-y-licencia).
+| Column | Content | Unit | Data type |
+| --- | --- | --- | --- |
+| `Type` | Payment type (order: payment_type) | — | Text |
+| `Days for shipping (real)` | Actual shipping days; with the scheduled ones they give the label (outcome, kept out of the model: real_days) | days | Integer |
+| `Days for shipment (scheduled)` | Scheduled days, which the shipping mode sets (order: scheduled_days) | days | Integer |
+| `Benefit per order` | The line’s profit, set aside as a precaution (outcome, kept out of the model: benefit_total) | the file’s currency | Decimal |
+| `Delivery Status` | Delivery status: the label in other words (outcome, kept out of the model: delivery_status) | — | Text |
+| `Late_delivery_risk` | The source’s label: whether the order arrived late (outcome, kept out of the model: source_label) | — | Integer |
+| `Category Name` | Product category (line: category_name) | — | Text |
+| `Customer Country` | Customer country (order: customer_country) | — | Text |
+| `Customer Segment` | Customer segment (order: customer_segment) | — | Text |
+| `Department Name` | Product department (line: department_name) | — | Text |
+| `Market` | The order’s market (order: market) | — | Text |
+| `Order Country` | The order’s destination country (order: order_country) | — | Text |
+| `order date (DateOrders)` | When the order was created, to the minute and with no time zone (order: order_ts) | date and time | Text (ISO date and time) |
+| `Order Id` | Order number: the key of the order and of its outcome (order and line: order_id) | — | Integer |
+| `Order Item Cardprod Id` | Product card number (line: product_card_id) | — | Integer |
+| `Order Item Discount` | The line’s discount (line: discount) | the file’s currency | Decimal |
+| `Order Item Discount Rate` | The line’s discount rate (line: discount_rate) | share | Decimal |
+| `Order Item Id` | Line number, unique in the file (line: line_id) | — | Integer |
+| `Order Item Profit Ratio` | The line’s profit ratio, set aside as a precaution (outcome, kept out of the model: profit_ratio_mean) | share | Decimal |
+| `Order Item Quantity` | Units in the line (line: quantity) | units | Integer |
+| `Sales` | The line’s sales (line: sales) | the file’s currency | Decimal |
+| `Order Item Total` | The line’s total: sales less the discount (line: item_total) | the file’s currency | Decimal |
+| `Order Region` | The order’s destination region (order: order_region) | — | Text |
+| `Order Status` | The order’s status when the file was extracted, unknown when it is created (outcome, kept out of the model: order_status) | — | Text |
+| `Product Name` | Product name, without trailing spaces (line: product_name) | — | Text |
+| `Product Price` | The product’s unit price (line: product_price) | the file’s currency per unit | Decimal |
+| `shipping date (DateOrders)` | Shipping date, which already holds the actual days (outcome, kept out of the model: shipping_ts) | date and time | Text (ISO date and time) |
+| `Shipping Mode` | Shipping mode: Standard Class, Second Class, First Class or Same Day (order: shipping_mode) | — | Text |
 
-### 2.2 Saneamiento y reglas de calidad
+</details>
 
-Cada entrega pasa por 33 reglas de validación antes de cargarse: 18 bloquean la entrega, 6 advierten y 9 informan. Si una bloqueante falla, la entrega se rechaza y todo lo anterior queda intacto, byte a byte. Las 15 columnas personales se usan solo en las comprobaciones de la lectura y se descartan antes de escribir cualquier archivo; un correo o una contraseña sin enmascarar rechaza la fuente. Las columnas que delatan el resultado van a un flujo de resultados aparte: un pedido no tiene etiqueta en el almacén hasta que llega su resultado. Cada regla con su recuento real, en [reports/validation/latest.md](reports/validation/latest.md); qué hacer ante cada rechazo, en [docs/runbook.md](docs/runbook.md).
+Of the 53 columns, the flow carries 28. Left out are the 15 personal ones, dropped when the file is read, 4 that repeat another, 3 that are constant or empty, the 2 category and department codes, whose names are carried, and Order Profit Per Order, which repeats Benefit per order.
 
-## 3. Arquitectura y metodología
+### 2.2 Cleaning and quality rules
 
-Once tareas que corren siempre en este orden, las mismas desde la línea de comandos (`python -m latedel run`) y desde el DAG de Apache Airflow (`latedel_monthly`, una vez por mes, el día 2): descargan y verifican la fuente, publican la entrega del mes, la validan y la cargan en SQL, entrenan y congelan el modelo en el lanzamiento, puntúan los pedidos nuevos, siguen las alertas que cerraron, evalúan, exportan las tablas y el diseño del tablero y cierran la corrida.
+- **Validation in three levels.** Each delivery goes through 33 rules: 18 block (they reject the delivery and leave the previous load untouched), 6 warn and 9 inform. In the real run all 15 deliveries were loaded and none was rejected.
+- **Personal data dropped on reading.** The 15 personal columns (names, email, password, street, postcodes, cities, states, customer identifiers, latitude and longitude) are used only by the reader’s checks and reach no file; an unmasked email or password rejects the source.
+- **Leakage set aside.** The 8 columns that give the result away or are unknown when the order is created (the label, the actual days, the delivery status, the shipping date, the order status and the three profit ones) go to a separate outcomes stream; an order has no label in the store until its outcome arrives.
+- **Cancelled orders.** The 2,855 cancelled orders (7,754 lines) have no delivery time: they stay out of training and of the metrics, but are scored like any new order and counted.
+- **Blanks and corrections.** A value that does not exist stays null, not zero: an order not scored has no risk and an open one has no actual days. Product names lose their trailing spaces (1,774 lines) and each line’s total is accepted within 0.015 of sales less the discount. Order Zipcode is empty in 86.2 % of the rows and is not carried.
+- **A change of shape.** From October 2017, 8,340 of the 8,403 orders carry a single line, where before they carried one to five: that stretch is reported apart.
 
-### 3.1 Fuente e ingesta
+## 3. Architecture and methodology
 
-Sobre la integridad de la descarga: la fuente llega por HTTPS desde Mendeley, que redirige a un depósito de Amazon S3; cada salto debe ir a un host de la lista (`data.mendeley.com` y ese depósito), con a lo sumo tres redirecciones y un tope de 128 MiB, y el archivo se acepta solo si su SHA-256 es el fijado en la configuración (`fa6d022e…0aa6`, el que publica la API de archivos de Mendeley).
+The system runs as a monthly flow of eleven sequential tasks, the same from the command line (python -m latedel run) and from Apache Airflow’s latedel_monthly DAG in Docker: fetch_source → deliver → validate → load → fit_model → score → track → evaluate → export → render_dashboard → report.
 
-La segunda tarea hace de sistema de origen: como el archivo es histórico, el flujo lo reparte en un lanzamiento con lo conocido al 2017-01-07, trece entregas mensuales y un cierre al 2018-02-07 que solo trae resultados. Cada entrega tiene dos flujos: los pedidos creados en el período y los resultados que se conocieron en él, cada uno por su propia fecha; un pedido no tiene etiqueta en el almacén hasta que llega su resultado. Con ninguna entrega pendiente, la corrida termina como `no_delivery` y corta el resto. La tercera tarea corta el flujo, sin tocar nada, si la entrega no cumple el contrato.
+### 3.1 Source and ingestion
 
-### 3.2 Orquestación y transformación
+- **Verified download (fetch_source).** It downloads the CSV over HTTPS from Mendeley Data, which redirects to an Amazon S3 bucket: every hop must go to an allowed host, with 3 redirects at most and a cap of 128 MiB, and the file is accepted only if its SHA-256 matches the one fixed in the configuration, the one Mendeley’s file API publishes. Here the fingerprint does verify the download, because there is a trusted value to compare it with.
+- **A simulated source system (deliver).** Since the file is historical, the task splits it into a launch with what was known on 7 January 2017, thirteen monthly deliveries and a closing on 7 February 2018 that only brings outcomes. Each delivery carries two streams: the orders created in the period and the outcomes that became known in it, each by its own date. With no delivery left, the run ends as no_delivery.
+- **Quality gate (validate).** It applies the 33 rules to the delivery. If a blocking rule fails, the delivery is rejected and the run stops without touching anything: what came before stays intact, byte for byte.
+
+### 3.2 Orchestration and transformation
+
+- **Flow control (Apache Airflow).** The latedel_monthly DAG runs once a month, with no catchup and one run and one task active at a time; the keys are required from the environment, with no default. It was tested in Docker: pytest -m docker built the image and ran airflow dags test twice in quick mode on a synthetic source, the launch and the January 2017 delivery, with the frozen model identical (71.6 s). The real run on the Mendeley file was made from the command line.
+- **Transactional transformation (load).** It loads the accepted delivery into SQLite in a single transaction, all or nothing, with layered SQL files (staging and marts) and checks inside that same transaction; a delivery its run’s validation did not approve is rejected before anything is written.
+- **One writer and an ordered close.** Each task takes the data folder’s lock and a second process is refused without writing anything. A run counts as closed only at the end, in this order: SQLite, the runs table, the summary, the HTML, the deliveries manifest and the state file, so a process that dies halfway leaves nothing that says ok.
 
 ```mermaid
 flowchart LR
-  A[fetch_source<br/>CSV con huella fijada] --> B[deliver<br/>la siguiente entrega]
-  B --> C[validate<br/>33 reglas]
-  C --> D[load<br/>SQLite, todo o nada]
-  D --> E[fit_model<br/>entrena y congela en el lanzamiento]
-  E --> F[score<br/>puntúa los pedidos nuevos]
-  F --> G[track<br/>las alertas que cerraron]
-  G --> H[evaluate<br/>V2 y, una vez, la prueba]
-  H --> I[export<br/>20 Parquet y 5 JSON]
-  I --> J[render_dashboard<br/>HTML]
-  J --> K[report<br/>cierra la corrida]
+  subgraph source_lane["Source"]
+    n_csv["Mendeley Data CSV"]
+  end
+  subgraph orchestration_lane["Orchestration"]
+    n_airflow["Airflow DAG"]
+  end
+  subgraph task_lane["Tasks"]
+    n_fetch_source["fetch_source"]
+    n_deliver["deliver"]
+    n_validate["validate"]
+    n_load["load"]
+    n_fit_model["fit_model"]
+    n_score["score"]
+    n_track["track"]
+    n_evaluate["evaluate"]
+    n_export["export"]
+    n_render_dashboard["render_dashboard"]
+    n_report["report"]
+  end
+  subgraph storage_lane["Storage"]
+    n_sqlite["SQLite, in layers"]
+    n_artifact["Frozen model and its fingerprint"]
+    n_parquet["20 Parquet and 5 JSON"]
+  end
+  subgraph output_lane["Output"]
+    n_html["Dashboard design in HTML"]
+    n_results["Summary, criteria and seal"]
+  end
+  n_csv --> n_fetch_source
+  n_airflow --> n_fetch_source
+  n_fetch_source --> n_deliver
+  n_deliver --> n_validate
+  n_validate --> n_load
+  n_load --> n_fit_model
+  n_fit_model --> n_score
+  n_score --> n_track
+  n_track --> n_evaluate
+  n_evaluate --> n_export
+  n_export --> n_render_dashboard
+  n_render_dashboard --> n_report
+  n_load --> n_sqlite
+  n_fit_model --> n_artifact
+  n_export --> n_parquet
+  n_render_dashboard --> n_html
+  n_report --> n_results
 ```
 
-Una corrida solo se da por cerrada al final, en este orden: SQLite, la tabla exportada de corridas, el resumen, el HTML, el manifiesto de entregas y el archivo de estado, de modo que un proceso que muere a la mitad no deja nada que diga `ok` mientras otro archivo dice `running`. Un solo proceso escribe la carpeta de datos a la vez: cada tarea toma el bloqueo `data/interim/pipeline.lock`, y un segundo proceso se rechaza sin escribir nada (D82).
+### 3.3 Storage and data modelling
 
-La orquestación es la línea de comandos y el DAG de Airflow sobre Docker Compose, con las mismas tareas y las mismas funciones. Airflow en Docker se probó primero con pruebas estáticas del DAG y del compose. Después, `pytest -m docker` construyó la imagen, comprobó con `pip check` que las versiones fijadas conviven con las de Airflow y corrió `airflow dags test latedel_monthly` dos veces en modo rápido sobre una fuente sintética: el lanzamiento y la entrega de enero de 2017 terminaron bien con el modelo congelado idéntico (2 de 2 en 71,6 s, D80). La corrida real sobre el archivo de Mendeley se hizo con la línea de comandos.
+- **Transactional and audit database (SQLite).** It keeps orders and outcomes in separate tables (an order has no label until its outcome arrives), the insert-only scores and model registry, each run with its fingerprint and the verdict of each validation rule.
+- **Frozen model and seal.** The model is trained once, at the launch, and its artefact is loaded only if its SHA-256 matches the one recorded, before it is deserialised. The seal reports/model_seal.json keeps the launch configuration and the first test result, and is never rewritten: another configuration is reported apart, as after the seal.
+- **Star-schema analytical layer (Parquet).** The export task writes 20 Parquet tables, 10 dimensions and 10 facts with 9 one-to-many relationships that filter one way, with unique keys and referential integrity checked before writing: 2,229,845 bytes in all. Each file carries in its metadata the run, the calculation date, the source CSV’s fingerprint and the licence attribution.
 
-### 3.3 Almacenamiento y modelado de datos
+<details>
+<summary>Data model (20 tables)</summary>
 
-- **Almacén transaccional:** la tarea `load` carga cada entrega aceptada en SQLite, en capas y con archivos SQL, de forma todo o nada; pedidos y resultados van en tablas separadas.
-- **Modelo congelado y sello:** el modelo se entrena una sola vez, en el lanzamiento, y queda congelado: su artefacto se carga solo si su SHA-256 coincide con el registrado, y cada corrida mensual puntúa sus pedidos nuevos una vez, sin cambiar nunca un puntaje ya emitido. El sello guarda la configuración del lanzamiento y el primer resultado de la prueba; una evaluación con otra configuración se informa aparte, como posterior al sello.
-- **Tablas para Power BI:** 20 archivos Parquet (10 dimensiones y 10 hechos) en `outputs/powerbi/`, con nueve relaciones uno a varios y filtro en un solo sentido, claves únicas e integridad referencial verificadas antes de escribir; suman 2.229.845 bytes. `fact_order` lleva un pedido por fila con su riesgo, su alerta y su resultado, y el número de pedido de la fuente, que es la clave con la que un equipo actúa sobre una alerta (D32).
-
-### 3.4 Experimentación y Machine Learning
-
-El modelo se entrenó, se calibró y eligió su umbral solo con pedidos de 2015 y 2016; la prueba, los 14.527 pedidos no cancelados del 2017-01-08 al 2017-09-30, se evaluó una sola vez y quedó en el sello `reports/model_seal.json`, que no se reescribe. Los criterios se fijaron antes del primer código (ver 1.2). Cada decisión de diseño está en [docs/decisions.md](docs/decisions.md) (D01-D94), con su contexto, sus opciones, su motivo y su estado.
-
-Lo que se midió antes de construir: la investigación (`docs/research.md`) descargó el CSV de Mendeley, comprobó su huella con la API de archivos, perfiló las 53 columnas, midió la fuga (con la fecha de envío y el modo, el AUC en la prueba llega a 0,9985), propuso la partición y las líneas base e hizo una primera mirada del modelo. Los requerimientos (`docs/requirements.md`, `docs/plan.md` y las primeras 36 decisiones del registro) repitieron parte del perfilado solo con conteos y con el bloque de entrenamiento: la fecha de envío es la del pedido más 12, 48 o de 48 a 144 horas según el modo, y los Same Day creados desde el mediodía llegan tarde siempre; por eso se agregó la regla B5 y se eligió el pedido como unidad.
-
-#### 3.4.1 Ingeniería de características y línea base (baseline)
-
-- **Variables del momento del pedido.** Tres conjuntos: el modo de envío y sus días programados (F0); además el mercado, la región, el país, el segmento, el tipo de pago, los productos, las líneas, las unidades, las ventas y los descuentos del pedido (F1); además la hora, el día de la semana, el día del mes y el mes en que se creó (F2). Una lista permitida, un error propio (`LeakageError`), una prueba estática y una de perturbación impiden que una columna de resultado llegue a la matriz, y una trampa detiene el lanzamiento si el AUC del modelo elegido llega a 0,95 en V1.
-- **Reglas de comparación (D15).** B0 todo tarde, B1 solo First Class, B2 la tasa del entrenamiento por modo (First 1,000; Second 0,8017; Same Day 0,4652; Standard 0,4013), B3 días programados de dos o menos, B4 un control negativo y B5 la tasa del entrenamiento por modo y franja del pedido. Todas con tasas calculadas solo en el entrenamiento. B2 es la línea base a superar; B5, la más exigente.
-
-#### 3.4.2 Decisiones de modelado y ablación (ADR)
-
-| Decisión | Elegido | Por qué | Descartado |
+| Table | Kind | Columns | Joins |
 | --- | --- | --- | --- |
-| Clasificador (D12) | `HistGradientBoostingClassifier` de scikit-learn con una grilla fija de ocho configuraciones por cada conjunto (24 ajustes de 300 iteraciones, sin parada temprana). Se elige el de menor pérdida logarítmica en V1: F2, tasa de aprendizaje 0,05, 15 hojas y 100 pedidos por hoja | La grilla chica cuesta unos 20 s y no rompe el orden en el tiempo, que la parada temprana sí rompe | LightGBM o XGBoost (suman una tecnología sin ganancia encontrada); regresión logística (las interacciones irían a mano) |
-| Calibración (D13) | Regresión isotónica ajustada solo con V1 sobre el clasificador congelado (`FrozenEstimator`) | El umbral necesita una probabilidad que se pueda leer como tal; separar V2 evita elegirlo sobre las filas del calibrador | Calibrar y elegir el umbral sobre la misma validación |
-| Umbral por costo (D14) | El valor de 0,01 a 0,99 que maximiza el beneficio neto en V2, nunca F1: con los costos supuestos, 0,66. Para cada punto de equilibrio de 0,10 a 0,90 se repite la elección para el modelo, B2 y B5 | Los datos no traen costos; lo que decide es su cociente, y el supuesto se declara | Los valores ilustrativos de la investigación (punto de equilibrio 0,33, por debajo de la tasa de todos los modos); F1 o el índice de Youden, que ignoran los costos |
-| Columnas excluidas (D06) | Las que delatan el resultado y las tres de rentabilidad, en un flujo de resultados aparte | Junto al modo, los días reales y el estado de entrega dan un AUC de 1,000 en V2 | Excluir solo `Delivery Status` |
+| `Order date` | dimension | 10 | — |
+| `Month` | dimension | 5 | — |
+| `Shipping mode` | dimension | 5 | — |
+| `Market, region and country` | dimension | 4 | — |
+| `Product` | dimension | 4 | — |
+| `Customer segment` | dimension | 2 | — |
+| `Payment type` | dimension | 2 | — |
+| `Frozen model` | dimension | 12 | — |
+| `Run` | dimension | 15 | — |
+| `Calculation date` | dimension | 3 | — |
+| `Orders, with their risk and alert` | fact | 27 | Order date (`order_date_key`); Shipping mode (`mode_key`); Market, region and country (`geo_key`); Product (`main_product_key`); Customer segment (`segment_key`); Payment type (`payment_key`) |
+| `Monthly follow-up of the alerts` | fact | 12 | Month (`month_key`); Shipping mode (`mode_key`) |
+| `Each method’s metrics` | fact | 14 | — |
+| `Criteria and verdicts` | fact | 12 | — |
+| `ROC curve` | fact | 6 | — |
+| `Calibration by bins` | fact | 7 | — |
+| `Sensitivity to the costs` | fact | 7 | — |
+| `Columns that give the result away` | fact | 6 | — |
+| `Each variable’s importance` | fact | 3 | — |
+| `Validation rules` | fact | 8 | Run (`run_key`) |
 
-#### 3.4.3 Protocolo de validación (backtesting / cross-validation)
+</details>
 
-Una partición en el tiempo (pedidos no cancelados, con purgas de siete días entre bloques), no una validación cruzada:
+### 3.4 Experimentation and machine learning
 
-| Bloque | Pedidos del | al | Pedidos | Para qué |
-| --- | --- | --- | ---: | --- |
-| Entrenamiento | 2015-01-01 | 2016-06-30 | 29.894 | Ajustar los modelos y las tasas de las reglas |
-| V1 | 2016-07-08 | 2016-09-30 | 4.649 | Elegir y calibrar el modelo |
-| V2 | 2016-10-01 | 2016-12-31 | 5.032 | Elegir el umbral por costo |
-| Prueba | 2017-01-08 | 2017-09-30 | 14.527 | Evaluar una sola vez, bajo el sello |
-| Posterior al cambio de forma | 2017-10-01 | 2018-01-31 | 8.043 | Informar aparte |
+- **Rigour and traceability protocol.** The ten criteria and their thresholds were fixed and committed to Git before the first line of code, together with the written expectation: that the model would beat B2 and not B5. Every decision is in docs/decisions.md (D01-D94) with its context, options, reason and status; the model’s grid is fixed, so are the seeds (0 for the classifier and 0 for the resampling), and the versions are pinned with == in requirements.txt. The test was evaluated once and kept in a seal that is never rewritten.
 
-- **Intervalos.** Remuestreo pareado de los pedidos de la prueba, 1.000 remuestras con semilla 0, los mismos índices para los dos puntajes.
+#### 3.4.1 Feature engineering and baseline
 
-Ecuaciones, límites y resultados de cada método en la [ficha del modelo](docs/model-card.md).
+Three nested sets, from an allowed list and only with what exists when the order is created. F0: the shipping mode and its scheduled days. F1: F0 plus the order’s market, region and country, the customer’s country and segment, the payment type, the main product, category and department, and the order’s lines, units, sales, total and discounts. F2: F1 plus the hour, weekday, day of the month and month of creation. V1 chose F2. The baseline the model must beat is B2, the training late rate by shipping mode; the toughest is B5, that same rate split by the order’s half of the day, before or from noon.
 
-![Los siete bloques de la partición en el tiempo, con las purgas](docs/figures/split.png)
+**Baselines: which rules is the model measured against?** (D15)
 
-### 3.5 Consumo y gobernanza
+- **Selected alternative:** Six rules, all with training rates: B0 all late, B1 First Class only, B2 the rate by mode, B3 two scheduled days or fewer, B4 Standard Class only (a negative control) and B5 the rate by mode and half of the day; B2 and B5 also with their own threshold chosen on V2. The model has to beat the best simple rule known before looking at the test, not a weak rule picked to lose. If it only matches B5, the honest conclusion is that a two-variable rule does the same job.
+- **Rejected alternatives:** B2 only: It would leave out the noon cut, already seen in training.
+- **Rejected alternatives:** B0 to B4, as the research had: It does not measure whether the model learns anything beyond the order’s half of the day.
 
-- **Reportes automáticos:** `reports/evaluation_summary.json` y `.md` (los resultados), `reports/model_seal.json` (el sello) y `reports/validation/latest.md` (la última validación). `python -m latedel docs-sync` copia el bloque de resultados en este README y llena las tablas generadas del diccionario de datos.
-- **Ficha del modelo:** [docs/model-card.md](docs/model-card.md), con el uso, los datos, los métodos, la validación, los resultados, el rendimiento y los límites.
-- **Revisiones:** cada unidad que tocaba un punto de riesgo alto (el entorno, el archivo no confiable, la descarga, el artefacto del modelo, el sello, los contratos del tablero y del sitio, el orden del cierre, Docker) se revisó por separado, con sus correcciones. La de U23 pidió una corrección por un hallazgo crítico (el script de inicialización de Airflow seguía después de una migración fallida y salía con 0), que se hizo con la prueba primero. La de H7 terminó escalada, sin aprobación, por un hallazgo crítico de causalidad desconocida; se comprobó contra el código, no se sostenía, y una prueba lo fija (`c01fc61`). La de U25 se hizo en tres partes, porque superaba el tamaño que admite una revisión. La de H9 aprobó con ocho advertencias. Las demás aprobaron con advertencias o sin ellas. Las correcciones de la evaluación independiente también se revisaron (la de B2 pidió una corrección, de dos hallazgos deterministas, que se hizo con la prueba primero) y aprobaron con advertencias. Cada advertencia y cada hallazgo tiene su resolución en [docs/review-advisories.md](docs/review-advisories.md).
-- **La evaluación independiente:** una evaluación hecha por fuera del desarrollo, en un clon aparte y en solo lectura (plan, sección 25), recalculó cada cifra de los criterios C01 a C10 con un lector propio y dio lo mismo, y encontró seis bloqueantes, cuatro del código (una tarea que corría en una corrida que no había cargado su entrega, el bloqueo que no se soltaba en Windows si otro proceso lo tenía abierto, el resumen que decía pendiente la prueba sellada y otra configuración tomada por una reproducción fallida del sello) y dos de la documentación, y seis advertencias (`docs/evaluation.md`). Se corrigieron con la prueba primero, sin cambiar el sello ni ninguna salida versionada (D86 a D92). Una comprobación independiente de las correcciones, sobre dos copias, la evaluada (`eef9bea`) y la corregida (`52c7eeb`), dio los seis bloqueantes por cerrados, sin bloqueantes nuevos y sin diferencias que nadie pidiera, y encontró un hueco que las correcciones no habían causado: `task load` cargaba una entrega que su corrida no había validado, o que su validación había rechazado. Se corrigió con la prueba primero (D93, `441cccd`): `load` se rechaza ahora con salida 2 y antes de escribir. La documentación está sincronizada con ese commit.
+#### 3.4.2 Modelling decisions and ablation (ADR)
 
-Advertencias abiertas: `A1`, `R3-pending-why-branch-untested`, `R3-retrying-exc-info-cleared`, `R3-seal-mismatch-untested`, `R3-002` (A1 es la suite rápida por encima de los 135 s fijados para la corrección; `R3-002` es el de la revisión de B4, `R3-retrying-exc-info-cleared` el de la de B2 y los otros dos, los de la de B3; [docs/review-advisories.md](docs/review-advisories.md)).
+<details>
+<summary>4 decisions, each with what was rejected</summary>
 
-| Documento | Qué contiene |
-| --- | --- |
-| [docs/research.md](docs/research.md) | La investigación del conjunto de datos: la fuente, la fuga, la partición y una primera mirada |
-| [docs/requirements.md](docs/requirements.md) | Requerimientos, datos medidos y criterios de aceptación, con los criterios del modelo fijados antes de construir |
-| [docs/plan.md](docs/plan.md) | Arquitectura, módulos, contratos y unidades de trabajo |
-| [docs/decisions.md](docs/decisions.md) | Registro de decisiones (D01-D94), cada una con su contexto, opciones, decisión, motivo, lo que afecta, quién y estado |
-| [docs/model-card.md](docs/model-card.md) | Ficha del modelo: uso, datos, métodos, validación, resultados, rendimiento y límites |
-| [docs/review-advisories.md](docs/review-advisories.md) | Las advertencias de las revisiones nativas, con su resolución |
-| [docs/data-dictionary.md](docs/data-dictionary.md) | Diccionario de datos: las 53 columnas de la fuente con su destino y cada columna de las 20 tablas exportadas, con su unidad |
-| [docs/runbook.md](docs/runbook.md) | Qué hacer ante una huella distinta, una entrega rechazada, la trampa de fuga, un sello que no se reproduce, un bloqueo de la carpeta de datos y más (R1-R13) |
-| [docs/paso-a-paso.md](docs/paso-a-paso.md) | Cómo se construyó, unidad por unidad, con sus commits |
-| `docs/evaluation.md` | La evaluación independiente de `eef9bea`, sus seis bloqueantes y seis advertencias, cómo se resolvió cada uno y la comprobación independiente de esas correcciones |
+**Choice of classifier** (D12)
 
-## 4. Producto final
+- **Selected alternative:** scikit-learn’s HistGradientBoostingClassifier with a fixed grid of eight configurations per variable set (24 fits of 300 iterations, no early stopping), explicit ordinal encoding and seed 0. scikit-learn was already in the stack. The small grid costs about 20 s with the three sets, and early stopping uses a random split inside training, which breaks the order in time and the reproducibility.
+- **Rejected alternatives:** LightGBM or XGBoost: They add a technology with no reason the research found.
+- **Rejected alternatives:** Logistic regression: It would mean writing the interactions by hand, such as mode with the hour of the order.
+- **Rejected alternatives:** The research’s single configuration: It cannot choose between the variable sets without touching the test.
 
-### 4.1 Entregables operativos
+**Selection and calibration** (D13)
 
-- **Lista mensual de alertas:** cada pedido nuevo recibe su riesgo calibrado al crearse, y los que alcanzan el umbral quedan con una alerta; `fact_order` los lleva con el número de pedido de la fuente (ver 3.3).
-- **Diseño del tablero:** [dashboard/powerbi-design.html](dashboard/powerbi-design.html), un solo archivo de 130.972 bytes, sin recursos externos, con el modelo semántico, las relaciones, 31 medidas DAX, la carga en Power Query y cinco páginas (alertas, dónde se traban, seguimiento, validación del modelo, calidad y corridas) con vistas previas dibujadas con los números reales. El `.pbix` requiere la interfaz gráfica de Power BI Desktop y no está hecho; las medidas DAX no se ejecutaron nunca (el HTML lo dice).
-- **Archivos para el sitio:** cinco JSON pequeños en `outputs/site/` (resumen, reglas de validación, fuga, algoritmos y alertas) y un manifiesto con la huella de cada uno, 61.727 bytes en total sin el manifiesto; sin el número de pedido ni ningún identificador, con las celdas de menos de 20 pedidos ocultas.
-- **Orquestación:** la línea de comandos y el DAG de Airflow sobre Docker Compose (ver 3.2). La función de puntuación queda lista para envolverla en un servicio; no hay una API (D33).
+- **Selected alternative:** Choose the candidate by log loss on V1, calibrate it with isotonic regression over the frozen classifier (FrozenEstimator), also on V1, and choose the threshold on V2. Log loss rewards the quality of the probability, which is what the threshold needs, and keeping V2 apart avoids choosing the threshold on the calibrator’s rows. F2 won with a learning rate of 0.05, 15 leaves and 100 orders per leaf (loss 0.5005 on V1).
+- **Rejected alternatives:** Choosing by AUC: It ignores calibration.
+- **Rejected alternatives:** Choosing by net benefit: It depends on the assumed costs.
+- **Rejected alternatives:** Calibrating and choosing the threshold on the same validation: It chooses the threshold on the calibrator’s rows, optimistically.
 
-### 4.2 Lectura de resultados actuales
+**Assumed costs and the alert threshold** (D14)
 
-Corrida real del 2026-11-11 sobre el archivo de Mendeley (huella SHA-256 `fa6d022e…0aa6`): el lanzamiento al 2017-01-07, trece entregas mensuales (2017-01 a 2018-01), el cierre al 2018-02-07 y una corrida sin entrega, dieciséis corridas en 105 segundos. La repetición completa se corrió una sola vez, con los costos supuestos tal como estaban, porque no se eligieron otros; escribió el sello y versionó las salidas. Nada se ajustó después de ver la prueba.
+- **Selected alternative:** Costs declared in generic units: an alert costs 5, a delay 20 and the alert avoids half of the delay (break-even point 0.5). The threshold is the value from 0.01 to 0.99 that maximises net benefit on V2, and the sensitivity repeats the choice at the 17 break-even points from 0.10 to 0.90. The data hold no costs and no open source gives a defensible one; what decides the threshold is the ratio, and a choice with no source is declared as such. With these costs the model’s threshold is 0.66.
+- **Rejected alternatives:** The research’s illustrative values: They give a break-even point of 0.33, below the rate of every mode: flagging almost everything is trivial and no model can help.
+- **Rejected alternatives:** F1 or Youden’s index: They ignore the costs, and F1 chose a threshold that flagged 99.9 % of the orders.
+- **Rejected alternatives:** No default value, only the curve: The dashboard would be left with no list of alerts.
 
-- **El seguimiento de las alertas, en la corrida real.** De enero de 2017 a enero de 2018 se puntuaron 23.600 pedidos nuevos y 8.840 quedaron con alerta. De las 8.421 alertas que cerraron con un resultado, 7.538 llegaron tarde; de los 12.915 pedidos cerrados que llegaron tarde, 5.377 no tuvieron alerta. El modelo esperaba 12.800 retrasos entre los pedidos cerrados y hubo 12.915.
+**Columns that give the result away** (D06)
 
-El bloque completo de resultados está en [Resultados completos de la corrida](#resultados-completos-de-la-corrida); la validación de la última entrega, en [reports/validation/latest.md](reports/validation/latest.md).
+- **Selected alternative:** Exclude the four that come after the order and, as a precaution, the three profit ones, with the label in a separate outcomes stream, an allowed list, its own error (LeakageError) and tests that prevent it. Next to the shipping mode, the actual days and the delivery status give an AUC of 1.000 on V2 and the shipping date 0.998, against 0.743 for the mode alone: a model with them knows the result only once the order has arrived. A trap also stops the launch if the chosen model’s AUC reaches 0.95 on V1.
+- **Rejected alternatives:** Exclude Delivery Status only: It is less than what gives the result away.
+- **Rejected alternatives:** Keep the profit columns: Nobody records when they are computed: they are set aside until that is known.
 
-![Las alertas mes a mes y los retrasos esperados frente a los observados](docs/figures/alerts.png)
+</details>
 
-## 5. Conclusión
+#### 3.4.3 Validation protocol (time split and sealed test)
 
-### 5.1 Evaluación frente a criterios de éxito
+A split in time by order date, with 7-day purges between blocks: training from 1 January 2015 to 30 June 2016 (29,894 orders), V1 to choose and calibrate (4,649), V2 for the threshold (5,032) and the test, from 8 January 2017 to 30 September 2017 (14,527 orders), evaluated once under the seal. The 8,043 orders after the change of shape are reported apart. The 95 % intervals come from 1,000 paired resamples of the test orders, with the same indices for both scores.
 
-| Criterio fijado de antemano | Qué mide | Resultado |
+### 3.5 Consumption and governance
+
+- **Consumption interfaces.** The Parquet tables feed the design of a dashboard: an HTML file of 130,972 bytes, with no external resources, holding the semantic model, the relationships and 5 pages drawn with the real numbers. For this site come 5 small JSON files, with no order number and the cells of fewer than 20 orders hidden.
+- **Governance artefacts.** The flow writes the evaluation summary with each criterion’s verdict, the seal and the latest validation; with them go the model card (intended use, data, methods, limits and reproducibility), the decision log and a runbook for every known failure.
+- **Full lineage.** Every Parquet table and every file for the site keeps the run key, the calculation date and the source CSV’s SHA-256 fingerprint; the data on this page are those of run 20261111T113954030322Z.
+
+## 4. Final product
+
+### 4.1 Operational deliverables
+
+- **Automation.** A monthly flow was set up that, with each delivery of new orders and already known outcomes, checks it against 33 rules: if something serious fails, the delivery is rejected and the previous load stays. It drops the 15 personal columns before writing anything, loads the orders into a layered SQL database and scores each new order with the model, which is trained once and stays frozen. Since the file is historical, the flow splits it into a launch and thirteen monthly deliveries. It is built for Airflow, where it was tested in Docker.
+- **Model in use.** Each order gets a risk when it is created, from the data that exist at that moment, and those above the threshold are flagged: a Same Day order created at 19 gets a risk of 1.0 and an alert; one created at 3, a risk of 0.0 and none. From January 2017 to January 2018, 23,600 orders were scored and 8,840 were given an alert; of the 8,421 alerts that had closed, 7,538 arrived late. The model expected 12,800 delays among the closed orders and there were 12,915. The alerts concentrate in the fast modes: Standard Class, with 14,104 orders scored, got just 3.
+- **Dashboard.** Everything ends in the tables of a star schema and in the dashboard shown at the top, drawn from the run’s real numbers: four views, from the alerts to the threshold and the rules, with the assumed costs in view.
+
+### 4.2 Reading the current results
+
+Snapshot of the last validated run (20261111T113954030322Z, with data to 7 February 2018), from January 2017 to January 2018:
+
+- **Orders scored.** 23,600 new orders in 13 monthly deliveries; 8,840 were given an alert (37.5 %).
+- **Closed alerts.** Of the 8,421 alerts whose outcome is known, 7,538 arrived late (89.5 %).
+- **Calibration in use.** Among the 22,570 closed orders, the model expected 12,800 delays and there were 12,915.
+- **Last month.** January 2018: 2,123 orders scored and 826 alerts.
+- **Alerts on cancelled orders.** 419 alerts (4.7 %) fell on orders that were later cancelled: they are counted, but stay out of the net benefit.
+
+## 5. Conclusion
+
+### 5.1 Evaluation against the success criteria
+
+**Status:** 7 of 9 success criteria met.
+
+**Not met:**
+
+- C03: the 95 % interval of the AUC difference against B5 runs from −0.006 to 0.005 and holds zero.
+- C05: with its own threshold, the model’s net benefit does not beat B5’s: 1,459.4 against 1,467.3 per 1,000 orders.
+
+The verdict against the nine criteria with a threshold set before the code was written; the tenth, C10, is informational:
+
+- **Against the rule by mode (C01, C02, C07).** The model ranks better: AUC 0.773 against 0.742, a difference of 0.031 with a 95 % interval of 0.026 to 0.036, and a Brier score of 0.1767 against 0.1890.
+- **Net benefit and alerts (C04, C08, C09).** With the assumed costs, 1,459.4 per 1,000 orders against 1,323.1 for B2 at 0.5; with the same 4,998 alerts, 4,499 late orders against 4,421; and never less than B2 at the 17 break-even points.
+- **Calibration (C06).** A calibration error of 0.016 against a maximum of 0.03, with a bias of −0.006 against a maximum of 0.02.
+- **Against the two-variable rule (C03, C05): does not beat it.** AUC 0.773 against B5’s 0.774, and 1,459.4 against 1,467.3 of net benefit. The model learns the shipping mode and the noon cut, and nothing else: permuting the mode drops the AUC by 0.262, the hour by 0.046 and no other variable by more than 0.0012.
+- **The stretch after the change of shape (C10, informational).** In the 8,043 orders from October 2017 the order repeats: AUC 0.779 for the model, 0.777 for B5 and 0.745 for B2.
+
+**Comparison on the test (14,527 orders)**
+
+| Method evaluated | AUC on the test | Role in the system |
 | --- | --- | --- |
-| C01 | Discriminación frente a la regla por modo | Cumple |
-| C02 | Mejora fuera del ruido frente a la regla por modo | Cumple |
-| C03 | Mejora fuera del ruido frente a la regla de dos variables | No cumple |
-| C04 | Beneficio neto frente a la regla de la investigación (B2 a 0,5) | Cumple |
-| C05 | Beneficio neto frente a la regla de dos variables con su propio umbral | No cumple |
-| C06 | Calibración en la prueba | Cumple |
-| C07 | Brier frente a la regla por modo | Cumple |
-| C08 | Con el mismo número de alertas que B2 a 0,5 | Cumple |
-| C09 | Sensibilidad a los costos | Cumple |
-| C10 | Tramo posterior al cambio de forma (informativo) | Informativo, sin umbral |
+| Calibrated gradient boosting | 0.773 | Risk and alert engine: 1,459.4 of net benefit per 1,000 orders |
+| B5: rate by mode and half of the day | 0.774 | Yields as much as the model, with an auditable rule: 1,467.3 |
+| B2: rate by shipping mode | 0.742 | The baseline to beat: 1,323.1 |
+| B3: two scheduled days or fewer | 0.716 | Comparison rule: 1,337.5 |
+| B1: First Class only | 0.632 | Comparison rule: 754.1 |
+| B0: all late | 0.500 | Flags every order: 699.0 |
+| B4: Standard Class only | 0.284 | Negative control: −638.5 |
 
-Las cifras de cada criterio y las tablas que comparan los métodos en la prueba, en el tramo posterior y en V2 están en [Resultados completos de la corrida](#resultados-completos-de-la-corrida), que copia `reports/evaluation_summary.md`.
+### 5.2 Methodological limits
 
-**Cómo leerlo.**
+The system shows that a calibrated classifier, measured against simple rules with criteria set beforehand, can say with numbers when it adds nothing. The data look generated: within Second and Standard Class the actual days spread almost evenly, First Class always takes 2 days and in Same Day the hour of the order decides the result without a single exception, so the result holds for this file and not for a company. The costs are assumed and the threshold depends on them; the test was evaluated once, with one split and one file; cancelled orders are scored, but the model says nothing about a cancellation; profit was left out as a precaution; and it does not predict at dispatch, because the shipping date already holds the delay.
 
-- **El modelo encuentra lo que hay en los datos: el modo de envío y el corte del mediodía.** Supera a la regla por modo (B2) en discriminación (AUC 0,773 frente a 0,742, con una diferencia de 0,031 y un intervalo del 95 % de 0,026 a 0,036; C01 y C02), en Brier (0,1767 frente a 0,1890; C07), en beneficio neto (1.459,4 frente a 1.323,1 u. por cada 1.000 pedidos; C04) y con el mismo número de alertas (entre 4.998 alertas, 4.499 pedidos tarde frente a 4.421; C08), y no pierde contra B2 en ninguno de los 17 puntos de equilibrio de costo (C09). La diferencia sale de Same Day: B2 le da a todo el modo la misma tasa (0,4652), y en el entrenamiento los 853 pedidos Same Day creados antes de las 12:00 llegaron a tiempo y los 742 creados desde las 12:00 llegaron tarde, sin una excepción.
-- **El modelo no supera a la regla de dos variables (B5), y ese es el resultado del proyecto.** B5 es la tasa de retraso del entrenamiento por modo y por franja del pedido, antes o desde las 12:00. Su AUC es 0,774 y el del modelo 0,773: la diferencia es −0,001, con un intervalo del 95 % de −0,006 a 0,005, que contiene el cero. **C03 no supera.** En beneficio neto, cada uno con su umbral elegido en V2, B5 da 1.467,3 u. por cada 1.000 pedidos y el modelo 1.459,4. **C05 no supera.** El plan lo escribió antes de medir (D16): dentro de cada celda de B5 no se vio ninguna otra señal, así que el modelo aprende una regla de dos variables y nada más. La importancia por permutación en V2 dice lo mismo: permutar el modo de envío hace caer el AUC 0,262 y la hora del pedido 0,046; ninguna otra variable lo mueve más de 0,0012, y la región, el mercado y el producto, nada.
-- **Las probabilidades están calibradas.** En la prueba, el error de calibración esperado es 0,016 y el sesgo −0,006 (C06), con una tasa de retraso observada del 57,0 %. Un 0,7 de riesgo quiere decir, en estos datos, que llegan tarde unos 7 de cada 10 pedidos así.
-- **El tramo posterior al cambio de forma de los datos cuenta lo mismo.** Desde octubre de 2017 casi todos los pedidos traen una sola línea; en esos 8.043 pedidos el AUC del modelo es 0,779, el de B5 0,777 y el de B2 0,745 (C10, informativo).
-- **Los costos son supuestos y lo dicen.** Una alerta cuesta 5, un retraso 20 y la alerta evita la mitad del retraso, en unidades genéricas (punto de equilibrio 0,5; D14). Los datos no traen costos y no hay una fuente pública defendible; con otros costos el umbral cambia, y la sensibilidad (C09, `fact_cost_sensitivity` y la figura de la curva de costo) muestra cómo. Un cambio de costos después del sello es un análisis nuevo: no reemplaza el resultado sellado.
-- **Lo que esto quiere decir para un equipo de logística:** con lo que se sabe al crear un pedido, una regla escrita a mano, la tasa por modo y si el pedido entró antes o después del mediodía, avisa igual de bien que el modelo. El aporte del proyecto es haberlo medido con la fuga cerrada (junto al modo de envío, los días reales y el estado de entrega dan un AUC de 1,000 en V2 y la fecha de envío 0,998, frente a 0,743 del modo solo) y dejar el flujo mensual, el seguimiento de las alertas y el tablero listos por si los datos traen otra señal.
+### 5.3 Future work
 
-![La tasa de retraso por modo de envío en el entrenamiento: la regla B2](docs/figures/mode_rates.png)
+- **A scheduled run on the real file.** The DAG was tested in Docker on a synthetic source and the real run was made from the command line: the monthly DAG still has to run on the Mendeley file.
+- **Real costs and another operation.** With a company’s measured costs, repeat the threshold choice as a new analysis, after the seal, and try the model on another operation’s data, where mode and hour may not be the whole signal.
+- **A scoring service.** The scoring function is ready to be wrapped; publishing it as an API awaits a decision (D33).
 
-![Same Day: la tasa de retraso según la hora del pedido, con el corte del mediodía de B5](docs/figures/noon_cutoff.png)
+## Run it
 
-![El AUC en V2 del modo de envío con cada columna que delata el resultado](docs/figures/leakage.png)
-
-![El modelo y las dos reglas en la prueba: AUC y beneficio neto por 1.000 pedidos](docs/figures/methods.png)
-
-![El beneficio neto de cada método según el punto de equilibrio del costo](docs/figures/cost_curve.png)
-
-### 5.2 Limitaciones metodológicas
-
-- **Lo que no se hizo todavía.** La corrida programada de Airflow sobre el archivo real todavía no se hizo (el DAG se probó en Docker con una fuente sintética), y el `.pbix`, que requiere Power BI Desktop, tampoco.
-- **Datos que parecen generados:** los días reales son casi uniformes dentro de cada modo y el corte del mediodía no tiene excepciones; el resultado dice lo que pasa en este archivo, no en una empresa.
-- **Costos supuestos:** el umbral y el beneficio neto dependen de ellos; la sensibilidad muestra el efecto de otros puntos de equilibrio, pero no reemplaza un costo real.
-- **Una sola evaluación:** la prueba se evaluó una vez, con un lanzamiento, una partición y un archivo.
-- **Cancelados, rentabilidad y predicción al despachar:** los pedidos cancelados se puntúan pero no tienen etiqueta; las columnas de rentabilidad quedan fuera por precaución; y no se puede predecir al despachar, porque la fecha de envío ya contiene la demora.
-
-La lista completa está en la ficha del modelo, sección «Limitaciones».
-
-### 5.3 Trabajo futuro
-
-Lo que la documentación deja pendiente: la corrida programada de Airflow sobre el archivo real; armar el `.pbix` a partir del diseño en HTML y ejecutar por primera vez las medidas DAX; elegir costos reales, que después del sello es un análisis nuevo; decidir si la función de puntuación se publica como una API (D33); bajar la suite rápida a los 135 s fijados para la corrección A1, que no se alcanzaron (D91); y resolver las advertencias abiertas de 3.5.
-
-## Resultados completos de la corrida
-
-El bloque siguiente no se escribe a mano: lo copia `python -m latedel docs-sync` de `reports/evaluation_summary.md`, que escribe el propio flujo.
-
-<!-- results:start -->
-Evaluación al 2018-02-07 (corrida `20261111T113954030322Z`).
-
-El modelo supera 7 de 9 criterios con umbral y no supera C03 ni C05.
-
-Costos supuestos y declarados, en unidades genéricas: alerta 5,0, retraso 20,0, efecto 0,50 (punto de equilibrio 0,50). Los criterios y sus umbrales se fijaron antes de construir (`docs/requirements.md`, sección 8.1).
-
-| Criterio | Qué mide | Veredicto |
-| --- | --- | --- |
-| C01 | Discriminación frente a la regla por modo | El modelo supera a la regla por modo: AUC 0,773 frente a 0,742. |
-| C02 | Mejora fuera del ruido frente a la regla por modo | El modelo supera a la regla por modo fuera del ruido: la diferencia de AUC es 0,031, con un intervalo del 95 % de 0,026 a 0,036. |
-| C03 | Mejora fuera del ruido frente a la regla de dos variables | El modelo no supera a la regla de dos variables: la diferencia de AUC es −0,001, con un intervalo del 95 % de −0,006 a 0,005. |
-| C04 | Beneficio neto frente a la regla de la investigación (B2 a 0,5) | El modelo supera a la regla de la investigación (B2 a 0,5) en beneficio neto: 1.459,4 frente a 1.323,1 u. por cada 1.000 pedidos. |
-| C05 | Beneficio neto frente a la regla de dos variables con su propio umbral | El modelo no supera a la regla de dos variables en beneficio neto con su propio umbral (0,80): 1.459,4 frente a 1.467,3 u. por cada 1.000 pedidos. |
-| C06 | Calibración en la prueba | El modelo supera el control de calibración: ECE 0,016 frente a un máximo de 0,03 y sesgo −0,006 frente a un máximo de 0,02 en valor absoluto. |
-| C07 | Brier frente a la regla por modo | El modelo supera a la regla por modo en Brier: 0,1767 frente a 0,1890 (menor es mejor). |
-| C08 | Con el mismo número de alertas que B2 a 0,5 | Con el mismo número de alertas que B2 a 0,5 (k = 4.998), el modelo supera a B2: 4.499 pedidos tarde frente a 4.421. |
-| C09 | Sensibilidad a los costos | El modelo supera o iguala a B2 en beneficio neto en los 17 puntos de equilibrio (0,10 a 0,90). |
-| C10 | Tramo posterior al cambio de forma (informativo) | Informativo, sin umbral: en el tramo posterior al cambio de forma (8.043 pedidos) el AUC del modelo es 0,779, el de B2 0,745 y el de B5 0,777; el modelo marca el 37,7 % de los pedidos con precisión 0,898 y recall 0,588. |
-
-**Prueba (2017-01-08 a 2017-09-30)**
-
-| Método | AUC | Brier | ECE | Marcados (%) | Precisión | Recall | BN por 1.000 pedidos (u.) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Modelo | 0,773 | 0,1767 | 0,016 | 37,1 | 0,894 | 0,581 | 1.459,4 |
-| B2 tasa de retraso por modo | 0,742 | 0,1890 | 0,003 | 34,4 | 0,885 | 0,534 | 1.323,1 |
-| B5 tasa por modo y hora del pedido | 0,774 | 0,1751 | 0,006 | 37,3 | 0,893 | 0,585 | 1.467,3 |
-
-**Tramo posterior al cambio de forma (informativo)**
-
-| Método | AUC | Brier | ECE | Marcados (%) | Precisión | Recall | BN por 1.000 pedidos (u.) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Modelo | 0,779 | 0,1747 | 0,007 | 37,7 | 0,898 | 0,588 | 1.501,3 |
-| B2 tasa de retraso por modo | 0,745 | 0,1875 | 0,001 | 35,0 | 0,889 | 0,540 | 1.362,1 |
-| B5 tasa por modo y hora del pedido | 0,777 | 0,1737 | 0,003 | 37,9 | 0,898 | 0,590 | 1.505,7 |
-
-**Validación (V2), no es la prueba**
-
-| Método | AUC | Brier | ECE | Marcados (%) | Precisión | Recall | BN por 1.000 pedidos (u.) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Modelo | 0,776 | 0,1731 | 0,011 | 37,7 | 0,899 | 0,588 | 1.504,4 |
-| B2 tasa de retraso por modo | 0,743 | 0,1865 | 0,001 | 35,3 | 0,892 | 0,545 | 1.381,2 |
-| B5 tasa por modo y hora del pedido | 0,781 | 0,1728 | 0,003 | 37,7 | 0,899 | 0,588 | 1.504,4 |
-<!-- results:end -->
-
-## Cómo correrlo de punta a punta
-
-Requisitos: Windows 10 u 11 (o Linux), Python 3.11 y, solo para Airflow, Docker Desktop. No se usa el Python global: el proyecto trae su propio entorno. El paquete no se instala en el entorno: los comandos lo encuentran con `PYTHONPATH` en `src`, como hacen las pruebas y el compose.
+Python 3.11, on PowerShell, from the repository folder:
 
 ```powershell
-cd 03-Logistics-Late-Deliveries
 py -3.11 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
 $env:PYTHONPATH = "src"
 
-# Pruebas (sin las que necesitan el archivo real ni Docker)
+# Tests, without the ones that need the real file or Docker
 .venv\Scripts\python -m pytest
 
-# Prueba rápida de punta a punta sobre datos sintéticos. Todo lo que lee y escribe queda en data\quick\
-# (no se versiona): no toca el almacén, los Parquet, el HTML, los reportes ni el sello de la corrida real.
+# Quick end-to-end run on synthetic data; everything stays in data\quick\, which is not versioned
 .venv\Scripts\python -m latedel make-fixture data\quick\dataco_fixture.csv
 .venv\Scripts\python -m latedel replay --config config\pipeline.quick.toml
 
-# Corrida real: descarga el CSV (96 MB) si no está en data\raw\ y corre las quince entregas, y después la corrida sin entrega
+# Real run: downloads the CSV (96 MB) if it is missing and runs the fifteen deliveries, then the run without one
 .venv\Scripts\python -m latedel replay
 .venv\Scripts\python -m latedel run
 
-# Pruebas con el archivo real y con Docker
+# Tests with the real file and with Docker
 .venv\Scripts\python -m pytest -m real_data
 .venv\Scripts\python -m pytest -m docker
 
-# Figuras de la documentación, bloque de resultados del README y tablas del diccionario de datos
+# Documentation figures and the results block of README.es.md
 .venv\Scripts\python -m latedel figures
 .venv\Scripts\python -m latedel docs-sync
 ```
 
-En el proyecto, la corrida real ya se hizo y su sello está versionado: repetirla con la misma configuración reproduce los valores sellados y no reescribe el sello, y con otra configuración el resultado se guarda aparte, como posterior al sello. Como la repetición reescribe las salidas versionadas con sus propias claves de corrida, conviene hacerla en una copia de la carpeta: allí `pytest -m real_data` pasa salvo la prueba de la corrida sellada, que comprueba que el sello y las salidas son de las mismas corridas y falla solo en esas claves (el sello conserva las de la corrida que lo escribió). En Linux, el entorno se crea con `python3.11 -m venv .venv`, los comandos usan `.venv/bin/python` y la variable se fija con `export PYTHONPATH=src`.
+Every operation, with its failures and how to recover, is in the [runbook](docs/runbook.md) (in Spanish).
 
-Con Airflow (Docker Compose): `cd airflow`, `copy .env.example .env` y completar en `.env` las cuatro claves, que no tienen valor por defecto (`FERNET_KEY`, `AIRFLOW__API_AUTH__JWT_SECRET`, `_AIRFLOW_WWW_USER_PASSWORD` y `LATEDEL_DB_PASSWORD`, la contraseña de la base de metadatos); en Linux, agregar `AIRFLOW_UID` con el id propio (`id -u`). Después, `docker compose up airflow-init` (construye la imagen y prepara la base) y `docker compose up -d`; la interfaz queda en `http://localhost:8080`, publicada solo en `127.0.0.1`. `pytest -m docker` prueba esta parte de punta a punta en modo rápido. Detalles y qué hacer si algo falla, en [docs/runbook.md](docs/runbook.md).
+## Source and licence
 
-Medido en la corrida real con el archivo ya descargado (AMD Ryzen 9 5950X de 16 núcleos, 64 GB, Windows 10, un solo proceso): la repetición completa, las quince entregas y la corrida sin entrega, tardó 105,14 s contra el tope de 10 minutos; el lanzamiento, 30 s contra 3 minutos (20,1 s de ellos en entrenar, calibrar y elegir el umbral), y cada corrida mensual de 3 a 7 s contra 60 s. El pico de memoria que mide el requisito es el del conjunto de trabajo del proceso (`PeakWorkingSetSize` de `GetProcessMemoryInfo`; en Linux, `ru_maxrss`): 921,6 MB contra el tope de 1,5 GB. La memoria comprometida del mismo proceso (`PeakPagefileUsage`), que se guarda como cifra informativa y sin tope, llegó a 2.824,1 MB. La suite rápida, de 1.298 pruebas (una se salta en Windows), tardó 147,15 s y 144,38 s en dos corridas seguidas en un clon nuevo de `441cccd`, el último commit de código: se cumplen los 150 s del requisito, con poco margen, y no los 135 s que se fijaron para la corrección de A1 (D91). Tabla por tarea en la [ficha del modelo](docs/model-card.md).
+Data source: Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: the 15 personal columns dropped on reading, the columns that give the result away moved to a flow of their own, lines added up per order, the history split into monthly deliveries, and risks, alerts, metrics and criteria calculated.
 
-## Paso a paso
-
-El proyecto se construyó en 27 unidades de trabajo más nueve de endurecimiento tras las revisiones y dos de velocidad de la suite, cada una con sus pruebas y su commit: investigación, requerimientos y plan, entorno y configuración, accesorio sintético, lectura segura y minimización, descarga con huella, entregas en dos flujos, validación, almacén y SQL, variables y guardas de fuga, partición y líneas base, modelo y calibración, umbral por costo, lanzamiento congelado y sello, evaluación y criterios, seguimiento mensual, modelo estrella, medidas DAX, diseño del tablero, exportación para el sitio, tareas y cierre ordenado, línea de comandos, Airflow y Docker, figuras, corrida real y documentación. Cada unidad se construyó con la prueba escrita primero y vista fallar, y una mutación por regla atrapada por una prueba con nombre; cuando el código de una unidad se escribió antes que su prueba, el registro lo dice (D37, D39). La cronología completa, con lo que se hizo, lo que se probó y lo que salió en cada una, está en [docs/paso-a-paso.md](docs/paso-a-paso.md).
-
-## Fuente y licencia
-
-Fuente de datos: Constante, Fabian; Silva, Fernando; Pereira, António (2019), 'DataCo SMART SUPPLY CHAIN FOR BIG DATA ANALYSIS', Mendeley Data, v5, http://doi.org/10.17632/8gx2fvg2k6.5, licencia CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modificaciones: se descartaron las 15 columnas personales al leer el archivo, se apartaron las columnas que delatan el resultado a un flujo propio, se agregaron las líneas por pedido, se repartió la historia en entregas mensuales y se calcularon riesgos, alertas, métricas y criterios.
-
-Los datos crudos no se versionan: el flujo descarga el archivo y verifica su huella. Ninguna salida lleva un dato personal; el número de pedido de la fuente está en los Parquet del tablero y en ningún archivo del sitio.
+The raw data is not versioned: the flow downloads the file and checks its hash. No output carries personal data.
